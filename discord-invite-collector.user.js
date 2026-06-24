@@ -7,6 +7,8 @@
 // @match        https://*.discord.com/*
 // @grant        GM_xmlhttpRequest
 // @connect      spokpay-crm.vercel.app
+// @updateURL    https://spokpay-crm.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
+// @downloadURL  https://spokpay-crm.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
 // @run-at       document-idle
 // ==/UserScript==
 

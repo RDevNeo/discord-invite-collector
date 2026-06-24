@@ -48,7 +48,23 @@ session list and relies on the deployed website being reachable.
 See [`docs/tampermonkey-discord-invite-collector.md`](docs/tampermonkey-discord-invite-collector.md)
 for more detail.
 
+## Auto-update
+
+The userscript carries `@updateURL`/`@downloadURL` pointing at a small proxy on the
+`spokpay-crm` Vercel app (`/api/userscript?key=...`). The proxy holds a read-only
+GitHub token and serves the latest script from this **private** repo, so Tampermonkey
+can auto-update without the repo being public. On every push that changes the script,
+a GitHub Action (`.github/workflows/bump-version.yml`) bumps the patch version so
+Tampermonkey detects the update on its next check (default: ~daily; forceable from the
+dashboard).
+
+Setup steps for the proxy + token live in [`vercel-proxy/README.md`](vercel-proxy/README.md).
+Install the script once from the proxy URL so Tampermonkey records the update source;
+after that, updates are automatic.
+
 ## Versioning
 
 The script version lives in two places that must stay in sync: the `@version` field
-in the userscript metadata header and the `SCRIPT_VERSION` constant in the body.
+in the userscript metadata header and the `SCRIPT_VERSION` constant in the body. The
+`bump-version` GitHub Action increments **both** on each qualifying push, so you do not
+normally edit them by hand.
