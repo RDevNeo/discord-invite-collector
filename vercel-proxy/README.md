@@ -3,7 +3,7 @@
 This is **reference documentation** for the auto-update mechanism. The actual proxy
 lives in the `spokpay-crm` project (TanStack Start), at:
 
-    src/routes/api.userscript.ts   →   https://spokpay-crm.vercel.app/api/userscript
+    src/routes/api.userscript.ts   →   https://spokpay-crm-lyart.vercel.app/api/userscript
 
 It holds a read-only GitHub token server-side and serves the latest script from this
 **private** repo, gated by a shared `?key=` secret — so Tampermonkey can auto-update
@@ -27,8 +27,8 @@ Tampermonkey ──GET /api/userscript?key=SECRET──▶ proxy ──GitHub AP
    - `GH_USERSCRIPT_TOKEN` = the token from step 1
 3. **Deploy** `spokpay-crm` (the route file is already added), then verify:
    ```bash
-   curl -s "https://spokpay-crm.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383" | head -12   # script header
-   curl -s -o /dev/null -w '%{http_code}\n' "https://spokpay-crm.vercel.app/api/userscript?key=wrong"                          # 403
+   curl -s "https://spokpay-crm-lyart.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383" | head -12   # script header
+   curl -s -o /dev/null -w '%{http_code}\n' "https://spokpay-crm-lyart.vercel.app/api/userscript?key=wrong"                          # 403
    ```
 4. **Install the script once** from the `?key=...` URL so Tampermonkey records the
    update source. After that, updates are automatic.

@@ -6,9 +6,9 @@
 // @match        https://discord.com/*
 // @match        https://*.discord.com/*
 // @grant        GM_xmlhttpRequest
-// @connect      spokpay-crm.vercel.app
-// @updateURL    https://spokpay-crm.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
-// @downloadURL  https://spokpay-crm.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
+// @connect      spokpay-crm-lyart.vercel.app
+// @updateURL    https://spokpay-crm-lyart.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
+// @downloadURL  https://spokpay-crm-lyart.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -18,7 +18,7 @@
   const CONFIG = {
     // Set this to the deployed website that exposes /api/public routes.
     // Example: "https://your-site.com"
-    BOARD_API_BASE_URL: "https://spokpay-crm.vercel.app",
+    BOARD_API_BASE_URL: "https://spokpay-crm-lyart.vercel.app",
   };
 
   const DISCOVER_URL = "https://discord.com/discovery/servers";

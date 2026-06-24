@@ -22,7 +22,7 @@ The script reads its API base from a single constant near the top of
 
 ```js
 const CONFIG = {
-  BOARD_API_BASE_URL: "https://spokpay-crm.vercel.app",
+  BOARD_API_BASE_URL: "https://spokpay-crm-lyart.vercel.app",
 };
 ```
 
