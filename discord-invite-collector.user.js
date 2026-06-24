@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discord Invite Collector
 // @namespace    spokpay-crm
-// @version      1.10.1
+// @version      1.10.2
 // @description  Collect Discord invite URLs from public profiles or Discover, skipping invites already in your site database or blacklist.
 // @match        https://discord.com/*
 // @match        https://*.discord.com/*
@@ -25,7 +25,7 @@
   const DISCOVER_URL_PATH = "/discovery/servers";
   const DISCOVER_RESULTS_URL = "https://discord.com/servers";
   const DISCOVER_LANGUAGE_LABEL = "Português do Brasil";
-  const SCRIPT_VERSION = "1.10.1";
+  const SCRIPT_VERSION = "1.10.2";
 
   const LS_KEY = "discord_invite_url_collector_state";
   let _memState = null;
