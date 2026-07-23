@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discord Invite Collector
 // @namespace    spokpay-crm
-// @version      1.10.4
+// @version      1.10.5
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @match        https://discord.com/*
 // @match        https://*.discord.com/*
@@ -18,7 +18,7 @@
   const DISCOVER_URL_PATH = "/discovery/servers";
   const DISCOVER_RESULTS_URL = "https://discord.com/servers";
   const DISCOVER_LANGUAGE_LABEL = "Português do Brasil";
-  const SCRIPT_VERSION = "1.10.4";
+  const SCRIPT_VERSION = "1.10.5";
 
   const LS_KEY = "discord_invite_url_collector_state";
   let _memState = null;
@@ -64,16 +64,20 @@
     `,
   };
 
-  function getLS() {
-    try {
-      const ls = window.localStorage;
-      if (ls && typeof ls.getItem === "function") return ls;
-    } catch (e) {}
-    try {
-      const ss = window.sessionStorage;
-      if (ss && typeof ss.getItem === "function") return ss;
-    } catch (e) {}
-    return null;
+  // Discord's web app deletes window.localStorage from the page, and it does so at a
+  // point we cannot rely on. Never pick a single store: write to every store that is
+  // reachable right now and, on read, take whichever copy is the most recent.
+  function getStores() {
+    const stores = [];
+    for (const pick of [() => window.localStorage, () => window.sessionStorage]) {
+      try {
+        const store = pick();
+        if (store && typeof store.getItem === "function" && typeof store.setItem === "function") {
+          stores.push(store);
+        }
+      } catch (e) {}
+    }
+    return stores;
   }
 
   function defaultState() {
@@ -95,6 +99,7 @@
       log: "",
       statusText: "",
       inviteCount: 0,
+      savedAt: 0,
     };
   }
 
@@ -217,22 +222,44 @@
   }
 
   function loadState() {
-    try {
-      const ls = getLS();
-      if (ls) {
-        const raw = ls.getItem(LS_KEY);
-        if (raw) return JSON.parse(raw);
-      }
-    } catch (e) {}
-    return _memState || defaultState();
+    let best = null;
+    let bestSavedAt = -1;
+
+    const consider = (candidate) => {
+      if (!candidate || typeof candidate !== "object") return;
+      const savedAt = Number(candidate.savedAt) || 0;
+      if (savedAt < bestSavedAt) return;
+      bestSavedAt = savedAt;
+      best = candidate;
+    };
+
+    for (const store of getStores()) {
+      try {
+        const raw = store.getItem(LS_KEY);
+        if (raw) consider(JSON.parse(raw));
+      } catch (e) {}
+    }
+    consider(_memState);
+
+    return best ? { ...defaultState(), ...best } : defaultState();
   }
 
   function saveState(state) {
+    state.savedAt = Date.now();
     _memState = state;
+
+    let raw = null;
     try {
-      const ls = getLS();
-      if (ls) ls.setItem(LS_KEY, JSON.stringify(state));
-    } catch (e) {}
+      raw = JSON.stringify(state);
+    } catch (e) {
+      return;
+    }
+
+    for (const store of getStores()) {
+      try {
+        store.setItem(LS_KEY, raw);
+      } catch (e) {}
+    }
   }
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -803,8 +830,20 @@
     if (state.discoverPhase !== "navigate" && state.discoverPhase !== "search" && state.discoverPhase !== "browse")
       return;
 
+    // The page reload that brought us back here killed startCollection's loop, so this
+    // has to drive the run itself. A single non-navigating failure must not end the scan.
+    stopRequested = false;
     startDiscoverWatchdog();
-    await collectDiscoverInvites();
+    try {
+      while (!stopRequested) {
+        const completed = await collectDiscoverInvites();
+        if (stopRequested) break;
+        if (!loadState().running) break;
+        await sleep(completed ? 900 : 1000);
+      }
+    } finally {
+      stopDiscoverWatchdog();
+    }
   }
 
   function getDiscoverCards() {
