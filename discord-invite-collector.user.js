@@ -4,6 +4,7 @@
 // @version      1.10.12
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @author       RDevNeo
+// @license      MIT
 // @homepageURL  https://github.com/RDevNeo/discord-invite-collector
 // @supportURL   https://github.com/RDevNeo/discord-invite-collector/issues
 // @match        https://discord.com/*
@@ -24,26 +25,47 @@
   // only setting guaranteed to work for every user regardless of their Discord locale.
   const DISCOVER_LANGUAGE_ANY = "";
 
-  // Seed list for the panel dropdown before the user has ever loaded Discover. Discord
-  // labels these in their own language, so the labels are the same whatever UI language
-  // the user runs. The real list replaces this the first time we read Discord's own
-  // combobox, so a wrong or missing entry here is self-correcting.
-  const DISCOVER_LANGUAGE_SEED_OPTIONS = [
-    "English",
-    "Português do Brasil",
-    "Español",
-    "Français",
-    "Deutsch",
-    "Italiano",
-    "Nederlands",
-    "Polski",
-    "Русский",
-    "日本語",
-    "한국어",
-    "中文",
-    "Dansk",
-    "Čeština",
-    "Magyar",
+  // Discord's documented locale set, written the way Discord writes it: each language is
+  // labelled in its own language, so these strings are identical whatever UI language the
+  // user runs. Taken from the locale table in Discord's developer documentation rather
+  // than read off the page, because Discord virtualizes the language dropdown — scraping
+  // it only ever yields the dozen or so options currently scrolled into view.
+  //
+  // `aliases` covers the regional variants Discord documents separately but which the
+  // Discover filter may present as one entry (or vice versa). Ordered by English language
+  // name with English first, which is the order Discord itself uses.
+  const DISCOVER_LANGUAGES = [
+    { label: "English", aliases: ["English, US", "English, UK"] },
+    { label: "български" },
+    { label: "中文", aliases: ["中文, 中国"] },
+    { label: "繁體中文", aliases: ["中文, 台灣"] },
+    { label: "Hrvatski" },
+    { label: "Čeština" },
+    { label: "Dansk" },
+    { label: "Nederlands" },
+    { label: "Suomi" },
+    { label: "Français" },
+    { label: "Deutsch" },
+    { label: "Ελληνικά" },
+    { label: "हिन्दी" },
+    { label: "Magyar" },
+    { label: "Bahasa Indonesia" },
+    { label: "Italiano" },
+    { label: "日本語" },
+    { label: "한국어" },
+    { label: "Lietuviškai" },
+    { label: "Norsk" },
+    { label: "Polski" },
+    { label: "Português do Brasil", aliases: ["Português (Brasil)", "Português"] },
+    { label: "Română" },
+    { label: "Русский" },
+    { label: "Español", aliases: ["Español, España"] },
+    { label: "Español, LATAM" },
+    { label: "Svenska" },
+    { label: "ไทย" },
+    { label: "Türkçe" },
+    { label: "Українська" },
+    { label: "Tiếng Việt" },
   ];
 
   // Enforcing a language costs a combobox round-trip per card, and Discord occasionally
@@ -68,7 +90,6 @@
   let discoverWatchdogTimer = null;
   let discoverLanguageFailures = 0;
   let discoverLanguageEnforcementOff = false;
-  let discoverLanguageOptionsCaptured = false;
   let memberListToggleLabel = "";
 
   const ICONS = {
@@ -160,7 +181,6 @@
       collectorMode: "sidebar",
       discoverQuery: "",
       discoverLanguage: DISCOVER_LANGUAGE_ANY,
-      discoverLanguageOptions: [],
       discoverPhase: "idle",
       discoverSearchReady: false,
       discoverVisitedCardKeys: [],
@@ -222,37 +242,16 @@
   }
 
   function getDiscoverLanguageChoices() {
-    const state = loadState();
-    const stored = Array.isArray(state.discoverLanguageOptions) ? state.discoverLanguageOptions : [];
-    const cleaned = stored.map((entry) => normalizeInlineText(entry)).filter(Boolean);
-    const choices = cleaned.length ? cleaned : DISCOVER_LANGUAGE_SEED_OPTIONS.slice();
+    const choices = DISCOVER_LANGUAGES.map((entry) => entry.label);
 
-    // A language chosen from a previous, longer list must stay selectable, otherwise the
-    // dropdown would silently reset the user's choice to "Any".
+    // A language stored by an older version must stay selectable, otherwise the dropdown
+    // would silently reset the user's choice to "Any".
     const selected = getDiscoverLanguage();
     if (selected && !choices.some((entry) => discoverLanguageMatches(entry, selected))) {
       choices.push(selected);
     }
 
     return choices;
-  }
-
-  // Discord's own filter is the only authority on which languages exist and how they are
-  // spelled, so mirror whatever it offers instead of shipping a list of our own to drift.
-  function rememberDiscoverLanguageOptions(labels) {
-    const cleaned = [...new Set((labels || []).map((entry) => normalizeInlineText(entry)).filter(Boolean))];
-    if (cleaned.length < 2) return false;
-
-    const state = loadState();
-    const previous = Array.isArray(state.discoverLanguageOptions) ? state.discoverLanguageOptions : [];
-    if (previous.length === cleaned.length && previous.every((entry, i) => entry === cleaned[i])) {
-      return false;
-    }
-
-    state.discoverLanguageOptions = cleaned;
-    saveState(state);
-    refreshUI();
-    return true;
   }
 
   function normalizeDiscoverSearchValue(value) {
@@ -528,24 +527,45 @@
   }
 
   // Compare on letters and digits alone, so spacing and punctuation around an otherwise
-  // identical label cannot cause a false mismatch. Labels come from Discord's own list, so
-  // no table of per-language spellings is needed on top of that.
+  // identical label cannot cause a false mismatch.
   function languageComparisonKey(value) {
     return normalizeLanguageText(value).replace(/[^\p{L}\p{N}]+/gu, "");
   }
 
-  function discoverLanguageMatches(value, targetLabel) {
-    const normalized = normalizeLanguageText(value);
-    const target = normalizeLanguageText(targetLabel);
-    if (!normalized || !target) return false;
-    if (normalized === target) return true;
+  // Every spelling that counts as the same language: the documented label plus the
+  // regional variants listed beside it. Matching stays exact against this set rather than
+  // falling back to prefixes, because a prefix would let "Português" satisfy a request for
+  // "Português do Brasil" and silently scan the wrong language.
+  function languageKeySet(label) {
+    const keys = new Set();
+    const add = (value) => {
+      const key = languageComparisonKey(value);
+      if (key) keys.add(key);
+    };
 
-    // Deliberately exact: a prefix match would let "Português" satisfy a request for
-    // "Português do Brasil" and silently scan the wrong language. A genuine mismatch is
-    // better, because it is reported and falls back to leaving the filter untouched.
+    add(label);
+    const entry = DISCOVER_LANGUAGES.find(
+      (candidate) =>
+        languageComparisonKey(candidate.label) === languageComparisonKey(label) ||
+        (candidate.aliases || []).some(
+          (alias) => languageComparisonKey(alias) === languageComparisonKey(label),
+        ),
+    );
+    if (entry) {
+      add(entry.label);
+      for (const alias of entry.aliases || []) add(alias);
+    }
+
+    return keys;
+  }
+
+  function discoverLanguageMatches(value, targetLabel) {
     const valueKey = languageComparisonKey(value);
     const targetKey = languageComparisonKey(targetLabel);
-    return Boolean(valueKey) && valueKey === targetKey;
+    if (!valueKey || !targetKey) return false;
+    if (valueKey === targetKey) return true;
+
+    return languageKeySet(targetLabel).has(valueKey);
   }
 
   function getLabelledByText(element) {
@@ -695,10 +715,20 @@
   // languages are ordered so that scrolling to a far-down one is unreliable. Typing a
   // prefix filters the list down to it in one step ("portug" -> Português, Português do
   // Brasil), which is how a person would reach it too.
-  function buildDiscoverLanguageFilterQuery(targetLabel) {
-    const normalized = normalizeLanguageText(targetLabel);
-    const firstWord = normalized.split(" ")[0] || normalized;
-    return firstWord.slice(0, 6);
+  // Try the label as Discord spells it first, then an accent-stripped version in case its
+  // filter ignores diacritics, then the bare first word. Six characters is enough to
+  // narrow any language while staying short enough to survive a spelling difference
+  // further along the word.
+  function buildDiscoverLanguageFilterQueries(targetLabel) {
+    const raw = normalizeInlineText(targetLabel);
+    const stripped = normalizeLanguageText(targetLabel);
+    const firstWord = (value) => value.split(" ")[0] || value;
+
+    return [...new Set([
+      firstWord(raw).slice(0, 6),
+      firstWord(stripped).slice(0, 6),
+      raw.slice(0, 3),
+    ].filter(Boolean))];
   }
 
   async function filterDiscoverLanguageOptions(combobox, targetLabel) {
@@ -706,23 +736,23 @@
       return false;
     }
 
-    const query = buildDiscoverLanguageFilterQuery(targetLabel);
-    if (!query) return false;
+    for (const query of buildDiscoverLanguageFilterQueries(targetLabel)) {
+      combobox.focus();
+      setNativeValue(combobox, query);
+      combobox.dispatchEvent(new Event("input", { bubbles: true }));
 
-    combobox.focus();
-    setNativeValue(combobox, query);
-    combobox.dispatchEvent(new Event("input", { bubbles: true }));
-
-    return Boolean(
-      await waitFor(
+      const found = await waitFor(
         () =>
           getDiscoverLanguageOptions().some((item) =>
             discoverLanguageMatches(item.text, targetLabel),
           ),
-        3000,
+        1500,
         100,
-      ),
-    );
+      );
+      if (found) return true;
+    }
+
+    return false;
   }
 
   // Stop trying to pin the language and let the scan continue on whatever Discover shows.
@@ -772,9 +802,6 @@
       );
     }
 
-    // Read the list before any typing narrows it, so the panel dropdown mirrors every
-    // language Discord actually offers.
-    rememberDiscoverLanguageOptions(getDiscoverLanguageOptions().map((item) => item.text));
 
     if (
       !getDiscoverLanguageOptions().some((item) => discoverLanguageMatches(item.text, targetLabel))
@@ -831,40 +858,6 @@
     combobox.dispatchEvent(new Event("input", { bubbles: true }));
     combobox.blur();
     await sleep(200);
-  }
-
-  async function closeDiscoverLanguageCombobox(combobox, originalValue) {
-    if (!combobox) return;
-    combobox.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "Escape",
-        code: "Escape",
-        keyCode: 27,
-        which: 27,
-      }),
-    );
-    await restoreDiscoverLanguageCombobox(combobox, originalValue);
-  }
-
-  // With no language pinned we never open Discord's filter, so the panel dropdown would be
-  // stuck on the seed list forever. Peek at it once per session to mirror the real options.
-  async function captureDiscoverLanguageOptions() {
-    if (discoverLanguageOptionsCaptured) return false;
-
-    const combobox = await getOptionalDiscoverLanguageCombobox();
-    if (!combobox) return false;
-
-    discoverLanguageOptionsCaptured = true;
-    const originalValue = normalizeInlineText(combobox.value || "");
-    if (!(await openDiscoverLanguageCombobox(combobox))) return false;
-
-    const captured = rememberDiscoverLanguageOptions(
-      getDiscoverLanguageOptions().map((item) => item.text),
-    );
-    await closeDiscoverLanguageCombobox(combobox, originalValue);
-    return captured;
   }
 
   async function verifyDiscoverLanguage(targetLabel = getDiscoverLanguage()) {
@@ -1636,8 +1629,6 @@
         const languageReady = await ensureDiscoverLanguage();
         if (!languageReady || stopRequested) return false;
       }
-    } else {
-      await captureDiscoverLanguageOptions();
     }
     if (stopRequested) return false;
 

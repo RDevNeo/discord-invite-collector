@@ -41,3 +41,15 @@ dashboard). Push to `main` is all it takes to ship an update.
 The script version lives in two places that must stay in sync: the `@version` field in the userscript
 metadata header and the `SCRIPT_VERSION` constant in the body. The `bump-version` GitHub Action
 increments **both** on each qualifying push, so you do not normally edit them by hand.
+
+## Discover languages
+
+The **Language** dropdown lists Discord's documented locales, each written in its own language, so the
+options read the same whatever UI language you run. The list is built into the script rather than read
+off the page, because Discord virtualizes its language dropdown — only the options scrolled into view
+exist in the DOM at any moment. If Discover does not offer the language you pick, the scan says so in
+the log and continues unfiltered instead of stopping.
+
+## License
+
+[MIT](LICENSE).
