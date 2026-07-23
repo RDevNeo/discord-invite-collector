@@ -6,55 +6,44 @@ This doc describes `discord-invite-collector.user.js`, the Tampermonkey userscri
 
 The script scans Discord web pages for invite URLs and collects them into a local session list.
 
-It is designed to avoid duplicates by checking against:
-
-- the website's public server catalog
-- the website's public blacklist catalog
-
-The script is not the CRM itself. It is an external data-collection helper that runs in the browser.
+It is entirely self-contained: no external API, no database, no network calls of its own. Everything it
+finds lives in the panel and in `localStorage` until you copy it out or clear it.
 
 ## How it works
 
 The userscript supports three collection contexts:
 
-- sidebar mode
-- Discover mode
-- reader mode
+- **sidebar mode** — walks every server in the servers sidebar, opens each member's profile and reads
+  invite URLs out of the status, bio and profile links
+- **Discover mode** — searches Discord's Discover page for a term, opens each result server and copies
+  its invite URL from the "Invite to Server" dialog
+- **reader mode** — scrolls the current channel upward and collects invite URLs out of the messages
 
-Its main fetch path is:
+For every candidate it:
 
-- `GET /api/public/servers` from the deployed website
-- `GET /api/public/blacklist` from the deployed website
+- normalizes the invite URL to a canonical `https://discord.gg/<code>` form
+- drops anything that is not a Discord invite
+- de-duplicates against what the current session already collected
+- keeps the session list in `localStorage` so a page reload (or the Discover-mode restart watchdog)
+  does not lose progress
 
-From the code:
+## Panel
 
-- `BOARD_API_BASE_URL` points at the deployed site that exposes the public API routes
+- **Mode** select and, in Discover mode, the search term
+- Start / Pause / Copy collected URLs / Clear list
+- **Index** (Discover cursor) and **Collected** stat tiles
+- A log pane that shows only collected invite URLs and failures, with copy and clear buttons
 
-The collector then:
-
-- normalizes invite URLs
-- checks them against the local catalog sets
-- skips anything already known by the website catalog or blacklist
-- keeps a temporary in-memory/localStorage state while the scan is running
-
-## Why it exists
-
-This script exists to automate invite harvesting from Discord web without manually copying each invite.
-
-In practice it is used to:
-
-- gather Discord invite URLs from public profiles
-- run Discover-mode collection from Discord's server discovery pages
-- keep the collected data clean by skipping duplicates already known to the site
+Styling follows the SpokPay design system tokens (near-black violet dark theme), scoped to the panel
+via CSS custom properties so it does not leak into Discord's own styles.
 
 ## Important behavior
 
-- It does not permanently write invites into the CRM by itself.
-- It keeps a session list and local state for the current run.
-- It relies on the deployed website being reachable.
+- It never writes invites anywhere by itself — you copy them out of the panel.
+- Discover mode installs a watchdog that reloads the page if no progress is seen for 45 seconds.
 - The script version is tracked in both the userscript metadata header and the `SCRIPT_VERSION` constant.
 
 ## Related files
 
 - `discord-invite-collector.user.js`
-- `README.md` for install and configuration
+- `README.md` for install and auto-update

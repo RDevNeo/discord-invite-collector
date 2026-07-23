@@ -1,12 +1,11 @@
 // ==UserScript==
 // @name         Discord Invite Collector
-// @namespace    spokpay-crm
+// @namespace    discord-invite-collector
 // @version      1.10.2
-// @description  Collect Discord invite URLs from public profiles or Discover, skipping invites already in your site database or blacklist.
+// @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @match        https://discord.com/*
 // @match        https://*.discord.com/*
-// @grant        GM_xmlhttpRequest
-// @connect      spokpay-crm-lyart.vercel.app
+// @grant        none
 // @updateURL    https://spokpay-crm-lyart.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
 // @downloadURL  https://spokpay-crm-lyart.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
 // @run-at       document-idle
@@ -14,12 +13,6 @@
 
 (function () {
   "use strict";
-
-  const CONFIG = {
-    // Set this to the deployed website that exposes /api/public routes.
-    // Example: "https://your-site.com"
-    BOARD_API_BASE_URL: "https://spokpay-crm-lyart.vercel.app",
-  };
 
   const DISCOVER_URL = "https://discord.com/discovery/servers";
   const DISCOVER_URL_PATH = "/discovery/servers";
@@ -32,16 +25,6 @@
   let stopRequested = false;
   let restartTimer = null;
   let discoverWatchdogTimer = null;
-
-  const catalog = {
-    loading: false,
-    loaded: false,
-    userLoaded: false,
-    loadPromise: null,
-    error: null,
-    knownInviteUrls: new Set(),
-    knownServerIds: new Set(),
-  };
 
   const ICONS = {
     play: `
@@ -81,10 +64,6 @@
     `,
   };
 
-  function isConfigured(value) {
-    return Boolean(value) && !String(value).includes("YOUR-");
-  }
-
   function getLS() {
     try {
       const ls = window.localStorage;
@@ -116,8 +95,6 @@
       log: "",
       statusText: "",
       inviteCount: 0,
-      catalogMatchKeys: [],
-      catalogMatchCount: 0,
     };
   }
 
@@ -302,44 +279,9 @@
     return [...new Set(normalized)];
   }
 
-  function getCatalogMatchKeys() {
-    const state = loadState();
-    return new Set(Array.isArray(state.catalogMatchKeys) ? state.catalogMatchKeys : []);
-  }
-
-  function addCatalogMatch(matchKey, label = "") {
-    const normalizedKey = String(matchKey || "").trim();
-    if (!normalizedKey) return false;
-
-    const state = loadState();
-    const keys = new Set(Array.isArray(state.catalogMatchKeys) ? state.catalogMatchKeys : []);
-    if (keys.has(normalizedKey)) return false;
-
-    keys.add(normalizedKey);
-    state.catalogMatchKeys = [...keys];
-    state.catalogMatchCount = keys.size;
-    saveState(state);
-    refreshUI();
-
-    if (label) {
-      log(`Catalog match already known by the website: ${label}`);
-    }
-
-    return true;
-  }
-
-  function getCatalogMatchCount() {
-    const state = loadState();
-    const stored = Number(state.catalogMatchCount);
-    return Number.isFinite(stored) && stored >= 0 ? stored : getCatalogMatchKeys().size;
-  }
-
-  function formatCollectionSummary(inviteCount, catalogMatchCount = getCatalogMatchCount()) {
+  function formatCollectionSummary(inviteCount) {
     const invites = Math.max(0, Number(inviteCount) || 0);
-    const known = Math.max(0, Number(catalogMatchCount) || 0);
-    return known > 0
-      ? `${invites} invite URL(s) collected, ${known} Database`
-      : `${invites} invite URL(s) collected.`;
+    return `${invites} invite URL(s) collected.`;
   }
 
   function getCurrentGuildId() {
@@ -600,11 +542,8 @@
 
     const currentValue = normalizeInlineText(combobox.value || "");
     if (discoverLanguageMatches(currentValue, targetLabel)) {
-      log(`Stage: Discover language already "${targetLabel}"`);
       return true;
     }
-
-    log(`Stage: change Discover language from "${currentValue || "unknown"}" to "${targetLabel}"`);
 
     const opened = await openDiscoverLanguageCombobox(combobox);
     if (!opened) {
@@ -630,7 +569,6 @@
           requestFlowRestart(`Discover language "${targetLabel}" did not apply.`);
           return false;
         }
-        log(`Stage: Discover language ready as "${targetLabel}"`);
         await sleep(600);
         return true;
       }
@@ -645,7 +583,6 @@
       const before = scroller.scrollTop;
       scroller.scrollTop = Math.min(scroller.scrollTop + Math.max(120, scroller.clientHeight - 40), scroller.scrollHeight);
       if (scroller.scrollTop === before) break;
-      log(`Stage: scroll Discover language options for "${targetLabel}" (attempt ${attempt + 1}, ${before}->${scroller.scrollTop})`);
       await sleep(150);
     }
 
@@ -658,7 +595,6 @@
     const combobox = await waitFor(() => getDiscoverLanguageCombobox(), 5000, 150);
     const value = normalizeInlineText(combobox?.value || "");
     if (discoverLanguageMatches(value, targetLabel)) {
-      log(`Stage: verified Discover language "${targetLabel}"`);
       return true;
     }
 
@@ -711,12 +647,6 @@
 
     const message = reason ? String(reason) : "Unexpected error.";
 
-    log(
-      `Restart requested: ${message} | phase=${state.discoverPhase} cursor=${state.discoverCardCursor} visited=${
-        Array.isArray(state.discoverVisitedCardKeys) ? state.discoverVisitedCardKeys.length : 0
-      } searchReady=${Boolean(state.discoverSearchReady)}`,
-    );
-
     state.statusText = `${message} Restarting page...`;
     state.discoverPhase = "navigate";
     state.discoverSearchReady = false;
@@ -764,15 +694,6 @@
       }
 
       if (Date.now() - lastActivityAt >= 45000) {
-        log(
-          `Discover watchdog restart: phase=${state.discoverPhase} cursor=${state.discoverCardCursor} visited=${
-            Array.isArray(state.discoverVisitedCardKeys) ? state.discoverVisitedCardKeys.length : 0
-          } searchReady=${Boolean(state.discoverSearchReady)} lastAddedAgo=${
-            Date.now() - (Number(state.discoverLastAddedAt) || 0)
-          }ms lastOpenedAgo=${Date.now() - (Number(state.discoverLastCardOpenedAt) || 0)}ms lastBrowseAgo=${
-            Date.now() - (Number(state.discoverLastBrowseAt) || 0)
-          }ms`,
-        );
         requestFlowRestart("No Discover progress was seen for 45 seconds.");
       }
     }, 2000);
@@ -882,7 +803,6 @@
     if (state.discoverPhase !== "navigate" && state.discoverPhase !== "search" && state.discoverPhase !== "browse")
       return;
 
-    await loadWebsiteCatalog();
     startDiscoverWatchdog();
     await collectDiscoverInvites();
   }
@@ -1013,7 +933,6 @@
           mode: "container-scrollBy",
           before,
           after: container.scrollTop,
-          target: describeScrollableElement(container),
         };
       }
 
@@ -1025,7 +944,6 @@
           mode: "container-scrollTop",
           before,
           after: container.scrollTop,
-          target: describeScrollableElement(container),
         };
       }
     }
@@ -1041,59 +959,26 @@
       mode: "window-scrollBy",
       before,
       after,
-      target: `windowY=${before}->${after}`,
     };
   }
 
   async function findNextDiscoverCardWithScroll(query, visitedKeys, startIndex) {
     const maxScrollAttempts = 20;
     const initialCards = getDiscoverCards();
-    log(
-      `Discover scan snapshot for "${query}": cards=${initialCards.length}, visited=${visitedKeys.size}, cursor=${startIndex}, scroll=${describeScrollableElement(
-        getDiscoverScrollContainer(),
-      )}`,
-    );
-    if (initialCards.length) {
-      log(`Discover card sample for "${query}": ${describeDiscoverCardSamples(initialCards)}`);
-    }
-
     for (let attempt = 0; attempt <= maxScrollAttempts; attempt++) {
       const waitTime = attempt === 0 ? 5000 : 1800;
       const card = await waitFor(() => getDiscoverNextCard(visitedKeys), waitTime);
-      if (card) {
-        if (attempt > 0) {
-          log(
-            `Stage: found next Discover card for "${query}" after ${attempt} scroll attempt(s) from cursor ${startIndex}`,
-          );
-        }
-        return card;
-      }
+      if (card) return card;
 
       if (attempt >= maxScrollAttempts) break;
 
       const amount = attempt < 4 ? 1100 : attempt < 10 ? 1600 : 2400;
       const scrollResult = scrollDiscoverResults(amount);
       if (!scrollResult.scrolled) {
-        log(
-          `Discover scroll stalled for "${query}" (attempt ${attempt + 1}, amount ${amount}): ${scrollResult.target}`,
-        );
         break;
       }
 
-      log(
-        `Stage: scroll Discover results for "${query}" to reveal more cards (attempt ${attempt + 1}, amount ${amount}, ${scrollResult.mode}, ${scrollResult.before}->${scrollResult.after})`,
-      );
       await sleep(attempt < 4 ? 1200 : 1600);
-    }
-
-    const finalCards = getDiscoverCards();
-    log(
-      `Discover scan exhausted for "${query}": cards=${finalCards.length}, visited=${visitedKeys.size}, cursor=${startIndex}, scroll=${describeScrollableElement(
-        getDiscoverScrollContainer(),
-      )}`,
-    );
-    if (finalCards.length) {
-      log(`Discover exhausted sample for "${query}": ${describeDiscoverCardSamples(finalCards)}`);
     }
 
     return null;
@@ -1300,53 +1185,6 @@
     return iconButton || null;
   }
 
-  function describeElement(element) {
-    if (!(element instanceof HTMLElement)) return null;
-
-    const rect = element.getBoundingClientRect();
-    const text = getTextLike(element).replace(/\s+/g, " ").trim();
-    return {
-      tag: element.tagName.toLowerCase(),
-      role: element.getAttribute("role") || "",
-      aria: (element.getAttribute("aria-label") || "").trim(),
-      title: (element.getAttribute("title") || "").trim(),
-      text: text.slice(0, 140),
-      x: Math.round(rect.left),
-      y: Math.round(rect.top),
-      w: Math.round(rect.width),
-      h: Math.round(rect.height),
-    };
-  }
-
-  function getInviteButtonCandidates() {
-    const selectors = [
-      '[aria-label*="Invite"]',
-      '[title*="Invite"]',
-      '[data-tooltip*="Invite"]',
-      '[aria-label*="Convidar"]',
-      '[title*="Convidar"]',
-      '[data-tooltip*="Convidar"]',
-      "button",
-      "[role='button']",
-    ].join(", ");
-
-    return [...document.querySelectorAll(selectors)]
-      .filter((element) => element instanceof HTMLElement && isVisible(element))
-      .map(describeElement)
-      .filter(Boolean)
-      .filter((item) => {
-        const hay = `${item.aria} ${item.title} ${item.text}`.toLowerCase();
-        return hay.includes("invite") || hay.includes("convidar");
-      })
-      .sort((a, b) => a.y - b.y || a.x - b.x)
-      .slice(0, 12);
-  }
-
-  function logInviteButtonProbe(context) {
-    const candidates = getInviteButtonCandidates();
-    log(`${context} | page="${document.title}" url="${location.href}" invite_candidates=${JSON.stringify(candidates)}`);
-  }
-
   async function extractInviteFromDialog(dialog) {
     if (!dialog) return null;
 
@@ -1400,11 +1238,9 @@
   async function openServerFromDiscoverCard(card) {
     const goButton = getDiscoverFirstCardGoButton(card);
     if (goButton) {
-      log(`Stage: click Discover card go button for "${card.label || card.key || "unknown"}"`);
       dispatchHumanClick(goButton);
     } else {
       const activationTarget = getDiscoverCardActivationTarget(card.element, card.label || card.key);
-      log(`Stage: click Discover card activation target for "${card.label || card.key || "unknown"}"`);
       dispatchHumanClick(activationTarget || card.element);
     }
     await sleep(2400);
@@ -1412,18 +1248,14 @@
     return true;
   }
 
-  async function clickInviteToServerFromServer(sourceLabel, serverName = "", options = {}) {
+  async function clickInviteToServerFromServer(sourceLabel, serverName = "") {
     const resolvedServerName = extractServerNameFromLabel(serverName || sourceLabel);
-    log(`Stage: reveal server actions for "${resolvedServerName || sourceLabel}"`);
     await revealServerHeaderActions(resolvedServerName);
     await sleep(350);
 
-    log(`Stage: locate invite button for "${resolvedServerName || sourceLabel}"`);
     const inviteButton = await waitFor(() => getInviteToServerButton(), 5000);
 
     if (!inviteButton) {
-      logInviteButtonProbe(`Invite button not found after first probe for "${resolvedServerName || sourceLabel}"`);
-      log(`Stage: retry server action reveal for "${resolvedServerName || sourceLabel}"`);
       await revealServerHeaderActions(resolvedServerName);
       await sleep(350);
     }
@@ -1431,35 +1263,25 @@
     const retryInviteButton = inviteButton || (await waitFor(() => getInviteToServerButton(), 3500));
 
     if (!retryInviteButton) {
-      log("Could not find the Invite to Server button.");
-      logInviteButtonProbe(`Invite button missing after retry for "${resolvedServerName || sourceLabel}"`);
       throw new Error("Could not find the Invite to Server button.");
     }
 
-    log(
-      `Stage: click invite button for "${resolvedServerName || sourceLabel}" candidate=${JSON.stringify(
-        describeElement(retryInviteButton),
-      )}`,
-    );
     dispatchHumanClick(retryInviteButton);
     await sleep(800);
 
-    log(`Stage: wait for invite dialog for "${resolvedServerName || sourceLabel}"`);
     const dialog = await waitFor(() => getInviteDialog(), 5000);
     if (!dialog) {
       log("Could not find the invite dialog.");
       throw new Error("Could not find the invite dialog.");
     }
 
-    log(`Stage: extract invite URL from dialog for "${resolvedServerName || sourceLabel}"`);
     const invite = await waitFor(() => extractInviteFromDialog(dialog), 5000);
     if (!invite) {
       log("Could not read the invite URL from the dialog.");
       throw new Error("Could not read the invite URL from the dialog.");
     }
 
-    addInviteUrls([invite], sourceLabel, options);
-    log(`Copied invite URL from dialog for ${sourceLabel}: ${invite}`);
+    addInviteUrls([invite], sourceLabel);
 
     await closeInviteDialogAndReturnBack(sourceLabel, resolvedServerName);
     return true;
@@ -1470,12 +1292,10 @@
     const label = card.label || sourceLabel;
     const sequenceNumber = Math.max(1, Number.isFinite(ordinal) ? ordinal : (Number(loadState().discoverCardCursor) || 0) + 1);
 
-    log(`Stage: open Discover result card "${label}"`);
     addDiscoverVisitedCardKey(card.key);
     setDiscoverCurrentCardKey(card.key);
     markDiscoverCardOpened();
     setDiscoverCardCursor(sequenceNumber);
-    log(`Stage: advance Discover cursor to ${sequenceNumber} after "${label}"`);
 
     const languageVerified = await verifyDiscoverLanguage(DISCOVER_LANGUAGE_LABEL);
     if (!languageVerified) {
@@ -1485,20 +1305,10 @@
     await openServerFromDiscoverCard(card);
     if (stopRequested) return;
 
-    log(`Stage: close post-open popups for "${label}"`);
     await closeAllPopups();
     await sleep(400);
 
-    const guildId = getCurrentGuildId();
-    if (catalog.loaded && guildId && catalog.knownServerIds.has(guildId)) {
-      addCatalogMatch(`guild:${guildId}`, `${label} (server ID ${guildId})`);
-    }
-
-    log(`Stage: start invite flow for "${label}"`);
-    await clickInviteToServerFromServer(sourceLabel, label, {
-      catalogMatchKey: guildId ? `guild:${guildId}` : "",
-      catalogMatchLabel: label,
-    });
+    await clickInviteToServerFromServer(sourceLabel, label);
   }
 
   async function collectDiscoverInvites() {
@@ -1511,7 +1321,6 @@
     if (!isDiscoverPage()) {
       setDiscoverPhase("navigate");
       setStatus("Opening Discord Discover servers...");
-      log(`Stage: navigate to Discover URL ${DISCOVER_URL} for "${query}"`);
       if (!isDiscoverUrl()) {
         location.href = DISCOVER_URL;
       }
@@ -1519,19 +1328,13 @@
     }
 
     setStatus("Waiting for Discover page to load...");
-    log(`Stage: wait for Discover page to be ready for "${query}"`);
     const pageReady = await waitForDiscoverPageReady();
     if (!pageReady || stopRequested) return false;
 
     const preSearchLanguageCombobox = await getOptionalDiscoverLanguageCombobox();
     if (preSearchLanguageCombobox) {
-      log(`Stage: ensure Discover language "${DISCOVER_LANGUAGE_LABEL}" before search for "${query}"`);
       const languageReady = await ensureDiscoverLanguage(DISCOVER_LANGUAGE_LABEL);
       if (!languageReady || stopRequested) return false;
-    } else {
-      log(
-        `Stage: Discover language combobox is not visible before search for "${query}"; will enforce "${DISCOVER_LANGUAGE_LABEL}" after search`,
-      );
     }
 
     setDiscoverSearchReady(false);
@@ -1539,16 +1342,13 @@
     if (!state.discoverSearchReady) {
       setDiscoverPhase("search");
       setStatus(`Searching Discover for "${query}"...`);
-      log(`Stage: search Discover for "${query}" with language "${DISCOVER_LANGUAGE_LABEL}"`);
 
       const searchOk = await performDiscoverSearch(query);
       if (!searchOk || stopRequested) return false;
 
       setDiscoverSearchReady(true);
-      log(`Stage: Discover search ready for "${query}"`);
     }
 
-    log(`Stage: ensure Discover language "${DISCOVER_LANGUAGE_LABEL}" after search for "${query}"`);
     const postSearchLanguageReady = await ensureDiscoverLanguage(DISCOVER_LANGUAGE_LABEL);
     if (!postSearchLanguageReady || stopRequested) return false;
 
@@ -1556,17 +1356,14 @@
     if (!languageVerified || stopRequested) return false;
 
     if (!discoverSearchMatchesQuery(query)) {
-      log(`Stage: Discover search needs refresh after language verification for "${query}"`);
       setDiscoverSearchReady(false);
       setDiscoverPhase("search");
       setStatus(`Refreshing Discover search for "${query}"...`);
-      log(`Stage: re-search Discover for "${query}" with language "${DISCOVER_LANGUAGE_LABEL}"`);
 
       const searchOk = await performDiscoverSearch(query);
       if (!searchOk || stopRequested) return false;
 
       setDiscoverSearchReady(true);
-      log(`Stage: Discover search ready after language verification for "${query}"`);
 
       const refreshedLanguageVerified = await verifyDiscoverLanguage(DISCOVER_LANGUAGE_LABEL);
       if (!refreshedLanguageVerified || stopRequested) return false;
@@ -1575,7 +1372,6 @@
     setDiscoverPhase("browse");
     const visitedKeys = getDiscoverVisitedCardKeys();
     const startIndex = Math.max(0, Number(loadState().discoverCardCursor) || 0);
-    log(`Stage: wait for next Discover result card for "${query}" from cursor ${startIndex}`);
     const card = await findNextDiscoverCardWithScroll(query, visitedKeys, startIndex);
     if (!card) {
       const state = loadState();
@@ -1591,16 +1387,10 @@
       saveState(state);
       refreshUI();
 
-      log(
-        `Stage: Discover results exhausted for "${query}" | cards=${getDiscoverCards().length} visited=${visitedKeys.size} cursor=${startIndex}`,
-      );
       return true;
     }
 
     const ordinal = startIndex + 1;
-    log(
-      `Stage: open Discover result card #${ordinal} "${card.label}"${Number.isFinite(card.index) ? ` (visible rank ${card.index + 1})` : ""}`,
-    );
 
     try {
       await harvestDiscoverServer(card, query, ordinal);
@@ -1617,11 +1407,9 @@
 
   async function closeInviteDialogAndReturnBack(sourceLabel, serverName) {
     const query = getDiscoverQuery();
-    log(`Stage: close invite dialog for "${serverName || sourceLabel}"`);
     await closeAllPopups();
     await sleep(300);
 
-    log(`Stage: return to Discover URL after copying invite for "${serverName || sourceLabel}"`);
     setDiscoverSearchReady(false);
     if (isDiscoverUrl()) {
       location.reload();
@@ -1652,149 +1440,6 @@
     }
 
     return null;
-  }
-
-  function gmRequest(url, options = {}) {
-    return new Promise((resolve, reject) => {
-      if (typeof GM_xmlhttpRequest !== "function") {
-        reject(new Error("GM_xmlhttpRequest is not available"));
-        return;
-      }
-
-      GM_xmlhttpRequest({
-        method: options.method || "GET",
-        url,
-        headers: options.headers || {},
-        data: options.data,
-        responseType: "text",
-        onload: (res) => {
-          resolve({
-            status: res.status,
-            text: res.responseText || "",
-            headers: res.responseHeaders || "",
-          });
-        },
-        onerror: () => reject(new Error("NetworkError when attempting to fetch resource.")),
-        ontimeout: () => reject(new Error("Request timed out")),
-      });
-    });
-  }
-
-  async function fetchJson(url, options = {}) {
-    const useGM = typeof GM_xmlhttpRequest === "function";
-    const headers = {
-      Accept: "application/json",
-      ...(options.headers || {}),
-    };
-
-    let status = 0;
-    let text = "";
-
-    if (useGM) {
-      const res = await gmRequest(url, {
-        method: options.method || "GET",
-        headers,
-        data: options.body,
-      });
-      status = res.status;
-      text = res.text;
-    } else {
-      const res = await fetch(url, {
-        credentials: "omit",
-        ...options,
-        headers,
-      });
-      status = res.status;
-      text = await res.text();
-    }
-
-    let data = null;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch (e) {
-      throw new Error(`Invalid JSON from ${url}`);
-    }
-    if (status < 200 || status >= 300) {
-      throw new Error(data?.error || `HTTP ${status} from ${url}`);
-    }
-    return data;
-  }
-
-  async function loadWebsiteCatalog() {
-    if (catalog.loaded) {
-      catalog.userLoaded = true;
-      return catalog;
-    }
-    if (catalog.loadPromise) return catalog.loadPromise;
-
-    catalog.loadPromise = (async () => {
-      if (!isConfigured(CONFIG.BOARD_API_BASE_URL)) {
-        catalog.error = "Catalog config is incomplete. Set BOARD_API_BASE_URL.";
-        log(catalog.error);
-        return catalog;
-      }
-
-      catalog.loading = true;
-      setStatus("Loading website server list and blacklist...");
-      log("Loading existing servers and blacklist from the website...");
-
-      try {
-        const [serversData, blacklistData] = await Promise.all([
-          fetchJson(`${CONFIG.BOARD_API_BASE_URL.replace(/\/+$/, "")}/api/public/servers`),
-          fetchJson(`${CONFIG.BOARD_API_BASE_URL.replace(/\/+$/, "")}/api/public/blacklist`),
-        ]);
-
-        const serverRows = Array.isArray(serversData?.servers) ? serversData.servers : [];
-        const blacklistRows = Array.isArray(blacklistData?.blacklist)
-          ? blacklistData.blacklist
-          : [];
-
-        for (const row of serverRows) {
-          const invite = normalizeInvite(row?.invite_url);
-          if (invite) catalog.knownInviteUrls.add(invite);
-          if (row?.discord_server_id) catalog.knownServerIds.add(String(row.discord_server_id));
-        }
-
-        for (const row of blacklistRows) {
-          const invite = normalizeInvite(row?.invite_url);
-          if (invite) catalog.knownInviteUrls.add(invite);
-          if (row?.discord_server_id) catalog.knownServerIds.add(String(row.discord_server_id));
-        }
-
-        catalog.loaded = true;
-        catalog.userLoaded = true;
-        catalog.error = null;
-        log(
-          `Catalog loaded: ${catalog.knownInviteUrls.size} invite URL(s), ${catalog.knownServerIds.size} server ID(s).`,
-        );
-        setStatus("");
-      } catch (err) {
-        catalog.error = err instanceof Error ? err.message : String(err);
-        logError(`Catalog load failed: ${catalog.error}`, err);
-        setStatus("Catalog load failed. Scan will continue without filtering.");
-      } finally {
-        catalog.loading = false;
-        refreshUI();
-      }
-
-      return catalog;
-    })();
-
-    try {
-      return await catalog.loadPromise;
-    } finally {
-      catalog.loadPromise = null;
-    }
-  }
-
-  async function reloadWebsiteCatalog() {
-    catalog.loading = false;
-    catalog.loaded = false;
-    catalog.error = null;
-    catalog.loadPromise = null;
-    catalog.knownInviteUrls = new Set();
-    catalog.knownServerIds = new Set();
-    return loadWebsiteCatalog();
   }
 
   function closeAllPopups() {
@@ -2132,7 +1777,6 @@
     }
 
     setStatus(`Reading messages in ${channelName}...`);
-    log(`Stage: start Reader mode in "${channelName}"`);
 
     scroller.scrollTop = scroller.scrollHeight;
     await sleep(500);
@@ -2143,7 +1787,6 @@
     while (!stopRequested) {
       const messages = getCurrentChannelMessages();
       const oldestVisibleKey = messages[0]?.key || "";
-      log(`Stage: Reader visible messages=${messages.length} visited=${visited.size} in "${channelName}"`);
 
       let foundNewMessage = false;
 
@@ -2159,7 +1802,6 @@
         const invites = extractInviteUrlsFromMessage(message.element);
         if (invites.length > 0) {
           addInviteUrls(invites, `Reader: ${channelName}`);
-          log(`Stage: Reader collected ${invites.length} invite candidate(s) from message ${message.key}`);
         }
       }
 
@@ -2174,9 +1816,6 @@
       const after = scroller.scrollTop;
       const nextMessages = getCurrentChannelMessages();
       const nextOldestVisibleKey = nextMessages[0]?.key || "";
-      log(
-        `Stage: Reader scroll up in "${channelName}" ${before}->${after} visible=${nextMessages.length} oldest=${oldestVisibleKey} next_oldest=${nextOldestVisibleKey}`,
-      );
 
       if (!foundNewMessage && oldestVisibleKey === nextOldestVisibleKey) {
         stalePasses += 1;
@@ -2188,7 +1827,6 @@
       if (stalePasses >= 3) break;
     }
 
-    log(`Stage: Reader finished in "${channelName}" with ${visited.size} scanned message(s)`);
     refreshCounts();
   }
 
@@ -2207,7 +1845,6 @@
   }
 
   function log(message) {
-    console.log("[DIC]", message);
     const logEl = document.getElementById("dic-log");
     const timestamp = new Date().toLocaleTimeString();
 
@@ -2241,35 +1878,6 @@
     log(`${message}${details ? ` | ${details}` : ""}`);
   }
 
-  function describeDiscoverCard(card) {
-    if (!card) return "none";
-    return `#${Number.isFinite(card.index) ? card.index + 1 : "?"} ${card.label || card.key || "unknown"}`;
-  }
-
-  function describeScrollableElement(element) {
-    if (!(element instanceof HTMLElement)) return "none";
-
-    const tag = element.tagName.toLowerCase();
-    const className =
-      typeof element.className === "string" && element.className.trim()
-        ? `.${element.className.trim().replace(/\s+/g, ".").slice(0, 80)}`
-        : "";
-    const label = (element.getAttribute("aria-label") || element.getAttribute("data-list-id") || "").trim();
-
-    return `${tag}${className}${label ? ` aria="${label.slice(0, 40)}"` : ""} scrollTop=${Math.round(
-      element.scrollTop,
-    )} scrollHeight=${Math.round(element.scrollHeight)} clientHeight=${Math.round(element.clientHeight)}`;
-  }
-
-  function describeDiscoverCardSamples(cards) {
-    if (!Array.isArray(cards) || cards.length === 0) return "cards=[]";
-
-    const sample = (card) => describeDiscoverCard(card);
-    const first = cards.slice(0, 3).map(sample).join(" | ");
-    const last = cards.slice(-3).map(sample).join(" | ");
-    return `first=[${first}] last=[${last}]`;
-  }
-
   function getDiscoverCardIdentity(element, clickable, text) {
     const href =
       clickable instanceof HTMLElement ? (clickable.getAttribute("href") || clickable.href || "") : "";
@@ -2286,23 +1894,6 @@
       .map((part) => String(part || "").trim())
       .filter(Boolean);
     return parts.join(" | ");
-  }
-
-  let globalErrorHooksInstalled = false;
-
-  function installGlobalErrorHooks() {
-    if (globalErrorHooksInstalled || typeof window === "undefined") return;
-    globalErrorHooksInstalled = true;
-
-    window.addEventListener("error", (event) => {
-      const err = event?.error || event?.message || "Unknown window error";
-      logError("Window error", err);
-    });
-
-    window.addEventListener("unhandledrejection", (event) => {
-      const err = event?.reason || "Unknown promise rejection";
-      logError("Unhandled promise rejection", err);
-    });
   }
 
   function setStatus(text) {
@@ -2332,21 +1923,15 @@
     const discoverInput = document.getElementById("dic-discover-query");
     const status = document.getElementById("dic-status");
     const logEl = document.getElementById("dic-log");
-    const knownCountEl = document.getElementById("dic-known-count");
     const countEl = document.getElementById("dic-count");
     const discoverCardEl = document.getElementById("dic-discover-card");
     const discoverCardValueEl = document.getElementById("dic-discover-card-value");
-    const catalogEl = document.getElementById("dic-catalog");
     const indicator = document.getElementById("dic-indicator");
     const startLabel =
       mode === "discover" ? "Start Discover" : mode === "reader" ? "Start Reader" : "Start";
 
     if (startButton) {
-      startButton.disabled =
-        state.running ||
-        catalog.loading ||
-        !catalog.userLoaded ||
-        (mode === "discover" && !getDiscoverQuery());
+      startButton.disabled = state.running || (mode === "discover" && !getDiscoverQuery());
     }
     if (stopButton) stopButton.disabled = !state.running;
     if (copyButton) copyButton.disabled = state.running || (state.inviteUrls || []).length === 0;
@@ -2363,10 +1948,6 @@
     if (discoverRow) discoverRow.style.display = mode === "discover" ? "block" : "none";
     if (discoverInput) discoverInput.value = state.discoverQuery || "";
     if (status) status.textContent = "";
-    const catalogMatchCount = getCatalogMatchCount();
-    if (knownCountEl) {
-      knownCountEl.textContent = `${catalogMatchCount}`;
-    }
     if (countEl) {
       countEl.textContent = `${(state.inviteUrls || []).length}`;
     }
@@ -2375,23 +1956,9 @@
       discoverCardEl.style.display = mode === "discover" ? "" : "none";
       if (discoverCardValueEl) discoverCardValueEl.textContent = `${discoverCardIndex}`;
     }
-    if (catalogEl) {
-      if (catalog.loaded) {
-        catalogEl.textContent = "";
-      } else if (catalog.loading) {
-        catalogEl.textContent = "";
-      } else if (catalog.error) {
-        catalogEl.textContent = "";
-      } else {
-        catalogEl.textContent = "";
-      }
-    }
     if (indicator) {
-      indicator.className = catalog.loaded
-        ? "mt-[1px] h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(74,222,128,0.9)]"
-        : catalog.loading
-          ? "mt-[1px] h-2.5 w-2.5 rounded-full bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.9)]"
-          : "mt-[1px] h-2.5 w-2.5 rounded-full bg-zinc-500";
+      indicator.className = state.running ? "dic-indicator is-running" : "dic-indicator";
+      indicator.title = state.running ? "Running" : "Idle";
     }
 
     if (logEl) {
@@ -2411,7 +1978,6 @@
     state.statusText = `Stopped. ${formatCollectionSummary((state.inviteUrls || []).length)}`;
     saveState(state);
 
-    log("Stop requested.");
     refreshUI();
   }
 
@@ -2419,24 +1985,18 @@
     const state = loadState();
     const text = (state.inviteUrls || []).join("\n");
     await navigator.clipboard.writeText(text);
-    const summary = formatCollectionSummary(state.inviteUrls.length);
-    log(`Copied ${state.inviteUrls.length} invite URL(s) to clipboard. ${summary}`);
-    setStatus(`Copied invite URLs to clipboard. ${summary}`);
+    setStatus(`Copied invite URLs to clipboard. ${formatCollectionSummary(state.inviteUrls.length)}`);
   }
 
   function clearCollectedInvites() {
     const state = loadState();
-    const count = (state.inviteUrls || []).length;
     state.inviteUrls = [];
     state.inviteCount = 0;
-    state.catalogMatchKeys = [];
-    state.catalogMatchCount = 0;
     state.discoverCardCursor = 0;
     state.discoverVisitedCardKeys = [];
     state.discoverCurrentCardKey = "";
     saveState(state);
     refreshUI();
-    log(`Cleared ${count} collected invite URL(s) and reset DB-known count.`);
     setStatus("");
   }
 
@@ -2444,7 +2004,6 @@
     const state = loadState();
     await navigator.clipboard.writeText(state.log || "");
     setStatus("Log copied to clipboard.");
-    log("Copied full log to clipboard.");
   }
 
   function clearLogText() {
@@ -2452,19 +2011,15 @@
     state.log = "";
     saveState(state);
     refreshUI();
-    log("Log cleared.");
     setStatus("");
   }
 
-  function addInviteUrls(urls, sourceLabel, options = {}) {
-    if (!urls || !urls.length) return { added: 0, skippedKnown: 0, skippedInvalid: 0 };
+  function addInviteUrls(urls, sourceLabel) {
+    if (!urls || !urls.length) return { added: 0, skippedInvalid: 0 };
 
     const state = loadState();
     const set = new Set(state.inviteUrls || []);
-    const catalogMatchKey = String(options.catalogMatchKey || "").trim();
-    const catalogMatchLabel = String(options.catalogMatchLabel || sourceLabel || "").trim();
     let added = 0;
-    let skippedKnown = 0;
     let skippedInvalid = 0;
 
     for (const url of urls) {
@@ -2473,15 +2028,9 @@
         skippedInvalid++;
         continue;
       }
-      if (catalog.loaded && catalog.knownInviteUrls.has(normalized)) {
-        skippedKnown++;
-        addCatalogMatch(catalogMatchKey || `invite:${normalized}`, catalogMatchLabel);
-        continue;
-      }
       if (set.has(normalized)) continue;
 
       set.add(normalized);
-      catalog.knownInviteUrls.add(normalized);
       added++;
       log(`Collected invite URL from ${sourceLabel}: ${normalized}`);
     }
@@ -2496,14 +2045,7 @@
       refreshUI();
     }
 
-    if (skippedKnown > 0) {
-      log(`Skipped ${skippedKnown} invite URL(s) already present in the website catalog.`);
-    }
-    if (skippedInvalid > 0) {
-      log(`Ignored ${skippedInvalid} non-invite link(s).`);
-    }
-
-    return { added, skippedKnown, skippedInvalid };
+    return { added, skippedInvalid };
   }
 
   function createUI() {
@@ -2513,7 +2055,29 @@
     panel.id = "dic-panel";
     panel.innerHTML = `
       <style>
+        /* Design tokens mirrored from the SpokPay design system (src/styles.css). */
         #dic-panel {
+          --dic-radius: 0.75rem;
+          --dic-radius-sm: calc(var(--dic-radius) - 4px);
+          --dic-radius-lg: calc(var(--dic-radius) + 4px);
+          --dic-background: oklch(0.14 0.01 280);
+          --dic-foreground: oklch(0.97 0.005 280);
+          --dic-card: oklch(0.18 0.015 280);
+          --dic-primary: oklch(0.55 0.25 295);
+          --dic-primary-foreground: oklch(0.98 0.005 280);
+          --dic-secondary: oklch(0.24 0.02 280);
+          --dic-muted: oklch(0.22 0.015 280);
+          --dic-muted-foreground: oklch(0.7 0.02 280);
+          --dic-accent: oklch(0.32 0.1 295);
+          --dic-destructive: oklch(0.62 0.22 27);
+          --dic-success: oklch(0.7 0.16 150);
+          --dic-border: oklch(1 0 0 / 0.08);
+          --dic-input: oklch(1 0 0 / 0.12);
+          --dic-ring: oklch(0.55 0.25 295);
+          --dic-gradient-brand: linear-gradient(135deg, oklch(0.6 0.25 295), oklch(0.7 0.18 250));
+          --dic-shadow-card: 0 1px 2px oklch(0 0 0 / 0.2), 0 4px 16px oklch(0 0 0 / 0.35);
+          --dic-shadow-card-hover: 0 2px 4px oklch(0 0 0 / 0.25), 0 12px 28px oklch(0 0 0 / 0.5);
+
           position: fixed;
           top: 12px;
           left: 50%;
@@ -2521,22 +2085,27 @@
           z-index: 99999;
           width: 460px;
           max-width: calc(100vw - 24px);
-          background: #1e1f22;
-          border: 1px solid #34363c;
-          border-radius: 14px;
-          color: #dbdee1;
-          font-family: 'gg sans', sans-serif;
+          background: var(--dic-background);
+          border: 1px solid var(--dic-border);
+          border-radius: var(--dic-radius-lg);
+          color: var(--dic-foreground);
+          font-family: Sora, 'gg sans', ui-sans-serif, system-ui, sans-serif;
           font-size: 13px;
-          box-shadow: 0 8px 24px rgba(0,0,0,.4);
+          box-shadow: var(--dic-shadow-card);
+        }
+        #dic-panel *,
+        #dic-panel *::before,
+        #dic-panel *::after {
+          box-sizing: border-box;
         }
         #dic-header {
           padding: 10px 14px 10px 12px;
-          background: linear-gradient(180deg, #2b2d31 0%, #232428 100%);
-          border-radius: 14px 14px 0 0;
+          background: var(--dic-card);
+          border-radius: var(--dic-radius-lg) var(--dic-radius-lg) 0 0;
           display: flex;
           justify-content: space-between;
           align-items: center;
-          border-bottom: 1px solid #34363c;
+          border-bottom: 1px solid var(--dic-border);
           cursor: grab;
         }
         #dic-title {
@@ -2548,6 +2117,7 @@
         #dic-title span {
           font-weight: 600;
           font-size: 13px;
+          letter-spacing: -0.01em;
         }
         #dic-header-meta {
           display: flex;
@@ -2557,14 +2127,27 @@
         }
         #dic-version {
           font-size: 10px;
-          font-weight: 700;
+          font-weight: 600;
           letter-spacing: .04em;
-          color: #a5abb3;
-          background: rgba(255,255,255,.06);
-          border: 1px solid rgba(255,255,255,.08);
+          color: var(--dic-muted-foreground);
+          background: var(--dic-muted);
+          border: 1px solid var(--dic-border);
           border-radius: 9999px;
-          padding: 3px 7px;
+          padding: 3px 8px;
           line-height: 1;
+        }
+        .dic-indicator {
+          width: 10px;
+          height: 10px;
+          border-radius: 9999px;
+          background: var(--dic-muted-foreground);
+          opacity: .5;
+          flex: none;
+        }
+        .dic-indicator.is-running {
+          background: var(--dic-success);
+          opacity: 1;
+          box-shadow: 0 0 8px color-mix(in oklab, var(--dic-success) 70%, transparent);
         }
         #dic-traffic {
           display: flex;
@@ -2575,41 +2158,49 @@
           width: 12px;
           height: 12px;
           border-radius: 9999px;
-          border: 1px solid rgba(255,255,255,.14);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,.14);
+          border: 1px solid var(--dic-border);
+          box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.14);
           cursor: pointer;
           padding: 0;
           display: inline-block;
         }
-        .dic-light.red { background: #ff5f57; }
-        .dic-light.yellow { background: #febc2e; }
-        .dic-light.green { background: #28c840; }
+        .dic-light.yellow { background: oklch(0.78 0.16 75); }
+        .dic-light.green { background: var(--dic-success); }
         #dic-body {
-          padding: 10px 12px 12px;
+          padding: 12px;
         }
         #dic-mode-row,
         #dic-discover-row {
-          margin-bottom: 8px;
+          margin-bottom: 10px;
         }
         #dic-mode-label,
         #dic-discover-label {
           display: block;
           font-size: 11px;
           font-weight: 600;
-          color: #949ba4;
-          margin-bottom: 4px;
+          color: var(--dic-muted-foreground);
+          margin-bottom: 5px;
         }
         #dic-mode,
         #dic-discover-query {
           width: 100%;
-          box-sizing: border-box;
-          border: 1px solid #34363c;
-          border-radius: 8px;
-          background: #111214;
-          color: #dbdee1;
-          padding: 7px 9px;
+          border: 1px solid var(--dic-input);
+          border-radius: var(--dic-radius-sm);
+          background: var(--dic-card);
+          color: var(--dic-foreground);
+          padding: 8px 10px;
+          font-family: inherit;
           font-size: 12px;
           outline: none;
+          transition: border-color .15s ease, box-shadow .15s ease;
+        }
+        #dic-mode:focus,
+        #dic-discover-query:focus {
+          border-color: var(--dic-ring);
+          box-shadow: 0 0 0 3px color-mix(in oklab, var(--dic-ring) 25%, transparent);
+        }
+        #dic-discover-query::placeholder {
+          color: var(--dic-muted-foreground);
         }
         #dic-actions {
           display: flex;
@@ -2618,20 +2209,29 @@
         }
         .dic-btn {
           flex: 0 0 auto;
-          padding: 5px 10px;
-          border: none;
+          padding: 6px 12px;
+          border: 1px solid transparent;
           border-radius: 9999px;
-          color: white;
+          background: var(--dic-secondary);
+          color: var(--dic-foreground);
+          font-family: inherit;
           font-size: 11px;
           font-weight: 600;
           cursor: pointer;
-          min-width: 0;
           line-height: 1;
+          transition: filter .15s ease, opacity .15s ease;
+        }
+        .dic-btn:hover:not(:disabled) {
+          filter: brightness(1.15);
+        }
+        .dic-btn:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 3px color-mix(in oklab, var(--dic-ring) 35%, transparent);
         }
         .dic-icon-btn {
-          width: 28px;
-          min-width: 28px;
-          height: 28px;
+          width: 30px;
+          min-width: 30px;
+          height: 30px;
           padding: 0;
           display: inline-flex;
           align-items: center;
@@ -2645,15 +2245,31 @@
           flex: none;
         }
         .dic-btn:disabled {
-          opacity: .45;
+          opacity: .4;
           cursor: default;
         }
-        #dic-start { background: #4d64ff; }
-        #dic-stop { background: #da373c; }
-        #dic-copy { background: #40444b; }
-        #dic-clear-invites { background: #40444b; }
-        #dic-clear-log { background: #40444b; }
-        #dic-copy-log { background: #40444b; }
+        #dic-start {
+          background: var(--dic-primary);
+          color: var(--dic-primary-foreground);
+        }
+        #dic-stop {
+          background: var(--dic-destructive);
+          color: var(--dic-primary-foreground);
+        }
+        #dic-copy,
+        #dic-clear-invites,
+        #dic-clear-log,
+        #dic-copy-log {
+          background: var(--dic-secondary);
+          border-color: var(--dic-border);
+          color: var(--dic-muted-foreground);
+        }
+        #dic-copy:hover:not(:disabled),
+        #dic-clear-invites:hover:not(:disabled),
+        #dic-clear-log:hover:not(:disabled),
+        #dic-copy-log:hover:not(:disabled) {
+          color: var(--dic-foreground);
+        }
         .dic-sr-only {
           position: absolute;
           width: 1px;
@@ -2668,45 +2284,43 @@
         #dic-status {
           display: none;
         }
-        #dic-catalog {
-          display: none;
-        }
         #dic-stats-card {
-          margin-top: 8px;
-          padding: 0;
-          background: transparent;
-          border: 0;
-          box-shadow: none;
+          margin-top: 10px;
         }
         #dic-stats-grid {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
           gap: 8px;
         }
         .dic-stat {
+          position: relative;
           min-width: 0;
-          padding: 8px 10px;
-          border-radius: 14px;
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          background:
-            linear-gradient(180deg, rgba(98, 77, 149, 0.98), rgba(70, 55, 107, 0.98));
-          box-shadow:
-            0 10px 24px rgba(0, 0, 0, 0.18),
-            inset 0 1px 0 rgba(255, 255, 255, 0.08);
+          padding: 10px 12px 10px 14px;
+          border-radius: var(--dic-radius);
+          border: 1px solid var(--dic-border);
+          background: var(--dic-card);
+          box-shadow: var(--dic-shadow-card);
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 8px;
           text-align: left;
+          overflow: hidden;
+        }
+        .dic-stat::before {
+          content: "";
+          position: absolute;
+          inset: 0 auto 0 0;
+          width: 3px;
+          background: var(--dic-gradient-brand);
         }
         .dic-stat-label {
           display: block;
-          margin-bottom: 0;
           font-size: 9px;
-          font-weight: 700;
+          font-weight: 600;
           letter-spacing: 0.08em;
           text-transform: uppercase;
-          color: rgba(255, 255, 255, 0.74);
+          color: var(--dic-muted-foreground);
           min-width: 0;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -2714,11 +2328,11 @@
         }
         .dic-stat-value {
           display: block;
-          min-width: 5ch;
-          font-size: clamp(12px, 3.5vw, 16px);
+          min-width: 4ch;
+          font-size: clamp(12px, 3.5vw, 17px);
           line-height: 1;
-          font-weight: 800;
-          color: #ffffff;
+          font-weight: 700;
+          color: var(--dic-foreground);
           text-align: right;
           flex: none;
           font-variant-numeric: tabular-nums;
@@ -2727,10 +2341,10 @@
           white-space: nowrap;
         }
         #dic-log-card {
-          margin-top: 8px;
-          background: #111214;
-          border: 1px solid #34363c;
-          border-radius: 10px;
+          margin-top: 10px;
+          background: var(--dic-card);
+          border: 1px solid var(--dic-border);
+          border-radius: var(--dic-radius);
           overflow: hidden;
         }
         #dic-log-head {
@@ -2739,8 +2353,8 @@
           justify-content: space-between;
           gap: 6px;
           padding: 8px 10px;
-          border-bottom: 1px solid #34363c;
-          background: rgba(255, 255, 255, 0.02);
+          border-bottom: 1px solid var(--dic-border);
+          background: var(--dic-muted);
         }
         #dic-log-label {
           display: flex;
@@ -2748,10 +2362,10 @@
           gap: 7px;
           min-width: 0;
           font-size: 11px;
-          font-weight: 700;
+          font-weight: 600;
           letter-spacing: 0.04em;
           text-transform: uppercase;
-          color: #dbdee1;
+          color: var(--dic-muted-foreground);
         }
         #dic-log-label svg {
           width: 14px;
@@ -2764,17 +2378,16 @@
           gap: 6px;
         }
         #dic-log {
-          margin-top: 0;
           padding: 8px 10px 10px;
           max-height: 220px;
           overflow-y: auto;
           font-size: 12px;
-          font-family: Consolas, monospace;
-          color: #b5bac1;
+          font-family: ui-monospace, Consolas, monospace;
+          color: var(--dic-muted-foreground);
           white-space: pre-wrap;
           word-break: break-word;
           scrollbar-width: thin;
-          scrollbar-color: rgba(185, 189, 197, 0.35) transparent;
+          scrollbar-color: color-mix(in oklab, var(--dic-muted-foreground) 35%, transparent) transparent;
         }
         #dic-log::-webkit-scrollbar {
           width: 6px;
@@ -2784,19 +2397,11 @@
           background: transparent;
         }
         #dic-log::-webkit-scrollbar-thumb {
-          background-color: rgba(185, 189, 197, 0.3);
+          background-color: color-mix(in oklab, var(--dic-muted-foreground) 30%, transparent);
           border-radius: 9999px;
         }
         #dic-log::-webkit-scrollbar-thumb:hover {
-          background-color: rgba(185, 189, 197, 0.55);
-        }
-        #dic-close {
-          background: none;
-          border: none;
-          color: #949ba4;
-          cursor: pointer;
-          font-size: 18px;
-          padding: 0 4px;
+          background-color: color-mix(in oklab, var(--dic-muted-foreground) 55%, transparent);
         }
         @media (max-width: 420px) {
           #dic-panel {
@@ -2805,13 +2410,6 @@
           }
           #dic-stats-grid {
             grid-template-columns: 1fr;
-          }
-          .dic-stat {
-            padding: 8px 10px;
-          }
-          .dic-stat-value {
-            min-width: 4ch;
-            font-size: clamp(12px, 5vw, 16px);
           }
         }
       </style>
@@ -2825,7 +2423,7 @@
         </div>
         <div id="dic-header-meta">
           <div id="dic-version">v${SCRIPT_VERSION}</div>
-          <div id="dic-indicator" class="mt-[1px] h-2.5 w-2.5 rounded-full bg-zinc-500"></div>
+          <div id="dic-indicator" class="dic-indicator" title="Idle"></div>
         </div>
       </div>
       <div id="dic-body">
@@ -2848,16 +2446,11 @@
           <button class="dic-btn dic-icon-btn" id="dic-clear-invites" disabled aria-label="Clear list"></button>
         </div>
         <div id="dic-status">Idle</div>
-        <div id="dic-catalog">Catalog not loaded.</div>
         <div id="dic-stats-card">
           <div id="dic-stats-grid">
             <div class="dic-stat" id="dic-discover-card" style="display:none">
               <span class="dic-stat-label">Index</span>
               <span class="dic-stat-value" id="dic-discover-card-value">0</span>
-            </div>
-            <div class="dic-stat">
-              <span class="dic-stat-label">Database</span>
-              <span class="dic-stat-value" id="dic-known-count">0</span>
             </div>
             <div class="dic-stat">
               <span class="dic-stat-label">Collected</span>
@@ -3033,7 +2626,6 @@
     saveState(state);
 
     setStatus(`Scanning members in ${serverName}...`);
-    log(`Scanning members in ${serverName}`);
 
     await ensureMemberListOpen();
     if (stopRequested) return;
@@ -3108,7 +2700,6 @@
     await sleep(500);
 
     const servers = getServerItems();
-    log(`Found ${servers.length} servers to scan.`);
 
     for (let index = 0; index < servers.length; index++) {
       if (stopRequested) break;
@@ -3119,8 +2710,6 @@
       const state = loadState();
       state.serverIndex = index;
       saveState(state);
-
-      log(`\n=== ${index + 1}/${servers.length}: ${server.name} ===`);
 
       server.element.click();
       await sleep(2500);
@@ -3145,14 +2734,6 @@
 
   async function startCollection() {
     try {
-      if (!catalog.loaded) {
-        setStatus("Loading catalog...");
-        await loadWebsiteCatalog();
-      }
-      if (!catalog.loaded) {
-        setStatus(catalog.error || "Catalog load failed.");
-        return;
-      }
       stopRequested = false;
 
       const state = loadState();
@@ -3162,8 +2743,6 @@
       state.inviteUrls = [];
       state.serverIndex = 0;
       state.inviteCount = 0;
-      state.catalogMatchKeys = [];
-      state.catalogMatchCount = 0;
       state.discoverPhase = mode === "discover" ? "navigate" : "idle";
       state.discoverSearchReady = false;
       state.discoverVisitedCardKeys = [];
@@ -3179,9 +2758,8 @@
             ? "Reader scan running..."
           : "Scanning Discord...";
       saveState(state);
-      refreshUI();
+        refreshUI();
 
-      await loadWebsiteCatalog();
       if (mode === "discover") {
         startDiscoverWatchdog();
         while (!stopRequested) {
@@ -3204,7 +2782,6 @@
       const finalState = loadState();
       finalState.running = false;
       finalState.inviteCount = (finalState.inviteUrls || []).length;
-      finalState.catalogMatchCount = getCatalogMatchCount();
       finalState.discoverPhase = "idle";
       finalState.discoverSearchReady = false;
       finalState.discoverCurrentCardKey = "";
@@ -3214,9 +2791,9 @@
       stopDiscoverWatchdog();
 
       if (stopRequested) {
-        finalState.statusText = `Stopped. ${formatCollectionSummary(finalState.inviteUrls.length, finalState.catalogMatchCount)}`;
+        finalState.statusText = `Stopped. ${formatCollectionSummary(finalState.inviteUrls.length)}`;
       } else {
-        finalState.statusText = `Finished. ${formatCollectionSummary(finalState.inviteUrls.length, finalState.catalogMatchCount)}`;
+        finalState.statusText = `Finished. ${formatCollectionSummary(finalState.inviteUrls.length)}`;
       }
 
       saveState(finalState);
@@ -3234,7 +2811,6 @@
       if (state.running) {
         state.running = false;
         state.discoverPhase = "idle";
-        state.catalogMatchCount = getCatalogMatchCount();
         state.discoverSearchReady = false;
         state.discoverCurrentCardKey = "";
         state.discoverLastAddedAt = 0;
@@ -3248,10 +2824,7 @@
   }
 
   createUI();
-  installGlobalErrorHooks();
-  loadWebsiteCatalog().catch(() => {});
   resumeDiscoverCollectionIfNeeded().catch((err) => {
-    console.error("[DIC] resume error", err);
+    logError("Resume failed", err);
   });
-  console.log("[DIC] ready");
 })();
