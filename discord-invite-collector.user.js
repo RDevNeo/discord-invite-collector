@@ -56,7 +56,11 @@
     { label: "Lietuviškai" },
     { label: "Norsk" },
     { label: "Polski" },
-    { label: "Português do Brasil", aliases: ["Português (Brasil)", "Português"] },
+    // Discover lists these as two separate filters that return different servers, so
+    // "Português" must never stand in for "Português do Brasil" — picking the wrong one
+    // silently scans European Portuguese results for someone who asked for Brazilian ones.
+    { label: "Português" },
+    { label: "Português do Brasil", aliases: ["Português (Brasil)", "Português, Brasil"] },
     { label: "Română" },
     { label: "Русский" },
     { label: "Español", aliases: ["Español, España"] },
@@ -669,6 +673,21 @@
       .filter((option) => option.text);
   }
 
+  // A label and one of its aliases can both be present in the list at once ("Español" sits
+  // beside "Español, LATAM"), so take an option spelled exactly the way the user asked
+  // before falling back to the alias set. Order of the list must never decide which of two
+  // near-identical languages gets clicked.
+  function findDiscoverLanguageOption(targetLabel) {
+    const options = getDiscoverLanguageOptions();
+    const targetKey = languageComparisonKey(targetLabel);
+
+    return (
+      options.find((item) => languageComparisonKey(item.text) === targetKey) ||
+      options.find((item) => discoverLanguageMatches(item.text, targetLabel)) ||
+      null
+    );
+  }
+
   async function openDiscoverLanguageCombobox(combobox) {
     if (!combobox) return false;
     if (combobox.getAttribute("aria-expanded") === "true" && getDiscoverLanguageOptions().length > 0) {
@@ -804,16 +823,12 @@
     }
 
 
-    if (
-      !getDiscoverLanguageOptions().some((item) => discoverLanguageMatches(item.text, targetLabel))
-    ) {
+    if (!findDiscoverLanguageOption(targetLabel)) {
       await filterDiscoverLanguageOptions(combobox, targetLabel);
     }
 
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      const option = getDiscoverLanguageOptions().find((item) =>
-        discoverLanguageMatches(item.text, targetLabel),
-      );
+      const option = findDiscoverLanguageOption(targetLabel);
       if (option?.element) {
         option.element.scrollIntoView({ block: "nearest" });
         dispatchHumanClick(option.element);
