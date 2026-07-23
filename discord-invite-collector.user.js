@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discord Invite Collector
 // @namespace    spokpay-crm
-// @version      1.10.5
+// @version      1.10.6
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @match        https://discord.com/*
 // @match        https://*.discord.com/*
@@ -18,10 +18,11 @@
   const DISCOVER_URL_PATH = "/discovery/servers";
   const DISCOVER_RESULTS_URL = "https://discord.com/servers";
   const DISCOVER_LANGUAGE_LABEL = "Português do Brasil";
-  const SCRIPT_VERSION = "1.10.5";
+  const SCRIPT_VERSION = "1.10.6";
 
   const LS_KEY = "discord_invite_url_collector_state";
   let _memState = null;
+  let _storageFrame = null;
   let stopRequested = false;
   let restartTimer = null;
   let discoverWatchdogTimer = null;
@@ -64,12 +65,41 @@
     `,
   };
 
-  // Discord's web app deletes window.localStorage from the page, and it does so at a
-  // point we cannot rely on. Never pick a single store: write to every store that is
-  // reachable right now and, on read, take whichever copy is the most recent.
+  // Discord's web app deletes BOTH window.localStorage and window.sessionStorage from
+  // the page, so state written straight to window survives nothing. A same-origin
+  // (about:blank) iframe gets a fresh window whose localStorage is the real discord.com
+  // store, untouched by that deletion — borrow it and keep the frame attached.
+  function getBorrowedStorage() {
+    try {
+      if (_storageFrame && _storageFrame.isConnected && _storageFrame.contentWindow) {
+        const store = _storageFrame.contentWindow.localStorage;
+        if (store) return store;
+      }
+    } catch (e) {}
+
+    try {
+      const root = document.documentElement || document.body || document.head;
+      if (!root) return null;
+      const frame = document.createElement("iframe");
+      frame.id = "dic-storage-frame";
+      frame.setAttribute("aria-hidden", "true");
+      frame.style.display = "none";
+      root.appendChild(frame);
+      _storageFrame = frame;
+      return frame.contentWindow ? frame.contentWindow.localStorage : null;
+    } catch (e) {}
+
+    return null;
+  }
+
+  // Write to every store reachable right now and, on read, take the most recent copy.
   function getStores() {
     const stores = [];
-    for (const pick of [() => window.localStorage, () => window.sessionStorage]) {
+    for (const pick of [
+      () => window.localStorage,
+      () => window.sessionStorage,
+      () => getBorrowedStorage(),
+    ]) {
       try {
         const store = pick();
         if (store && typeof store.getItem === "function" && typeof store.setItem === "function") {
