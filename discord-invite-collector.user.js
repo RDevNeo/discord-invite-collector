@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discord Invite Collector
 // @namespace    https://github.com/RDevNeo/discord-invite-collector
-// @version      1.10.12
+// @version      1.10.13
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @author       RDevNeo
 // @license      MIT
@@ -73,7 +73,7 @@
   // up after this many failures and keep scanning with whatever Discover is showing.
   const DISCOVER_LANGUAGE_FAILURE_LIMIT = 3;
 
-  const SCRIPT_VERSION = "1.10.12";
+  const SCRIPT_VERSION = "1.10.13";
 
   const DISCOVER_DRY_STREAK_LIMIT = 4;
 
