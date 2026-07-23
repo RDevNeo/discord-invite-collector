@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discord Invite Collector
 // @namespace    spokpay-crm
-// @version      1.10.8
+// @version      1.10.9
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @match        https://discord.com/*
 // @match        https://*.discord.com/*
@@ -18,7 +18,9 @@
   const DISCOVER_URL_PATH = "/discovery/servers";
   const DISCOVER_RESULTS_URL = "https://discord.com/servers";
   const DISCOVER_LANGUAGE_LABEL = "Português do Brasil";
-  const SCRIPT_VERSION = "1.10.8";
+  const SCRIPT_VERSION = "1.10.9";
+
+  const DISCOVER_DRY_STREAK_LIMIT = 4;
 
   const DISCOVER_CATEGORY_LABEL_PATTERN =
     /^(search results.*|filters?|all|gaming|general chatting|entertainment|anime(?: & manga)?|memes?|art|content creator|fandom|music|education|science & tech|student hubs)$/i;
@@ -125,6 +127,7 @@
       discoverVisitedCardKeys: [],
       discoverCardCursor: 0,
       discoverCurrentCardKey: "",
+      discoverDryStreak: 0,
       discoverLastAddedAt: 0,
       discoverLastCardOpenedAt: 0,
       discoverLastBrowseAt: 0,
@@ -874,6 +877,14 @@
     saveState(state);
   }
 
+  function setDiscoverDryStreak(value) {
+    const state = loadState();
+    const next = Math.max(0, Number(value) || 0);
+    if ((Number(state.discoverDryStreak) || 0) === next) return;
+    state.discoverDryStreak = next;
+    saveState(state);
+  }
+
   function setDiscoverCurrentCardKey(key) {
     const state = loadState();
     state.discoverCurrentCardKey = String(key || "");
@@ -1490,11 +1501,34 @@
     const startIndex = Math.max(0, Number(loadState().discoverCardCursor) || 0);
     const card = await findNextDiscoverCardWithScroll(query, visitedKeys, startIndex);
     if (!card) {
+      // Discover hands back a rotating sample of results per search (about nine at a
+      // time), so a page where everything is already visited is NOT proof the query is
+      // exhausted — re-searching usually surfaces servers the earlier samples missed.
+      // Only give up after several consecutive dry samples.
+      const dryState = loadState();
+      const dryStreak = (Number(dryState.discoverDryStreak) || 0) + 1;
+
+      if (dryStreak < DISCOVER_DRY_STREAK_LIMIT) {
+        dryState.discoverDryStreak = dryStreak;
+        dryState.discoverSearchReady = false;
+        dryState.discoverPhase = "navigate";
+        dryState.statusText = `No new results for "${query}" (${dryStreak}/${DISCOVER_DRY_STREAK_LIMIT}). Re-searching...`;
+        dryState.discoverLastAddedAt = Date.now();
+        dryState.discoverLastCardOpenedAt = Date.now();
+        dryState.discoverLastBrowseAt = Date.now();
+        saveState(dryState);
+        refreshUI();
+
+        location.href = DISCOVER_URL;
+        return false;
+      }
+
       const state = loadState();
       state.running = false;
       state.discoverPhase = "idle";
       state.discoverSearchReady = false;
       state.discoverCurrentCardKey = "";
+      state.discoverDryStreak = 0;
       state.discoverLastAddedAt = 0;
       state.discoverLastCardOpenedAt = 0;
       state.discoverLastBrowseAt = 0;
@@ -1505,6 +1539,8 @@
 
       return true;
     }
+
+    setDiscoverDryStreak(0);
 
     const ordinal = startIndex + 1;
 
@@ -2864,6 +2900,7 @@
       state.discoverVisitedCardKeys = [];
       state.discoverCardCursor = 0;
       state.discoverCurrentCardKey = "";
+      state.discoverDryStreak = 0;
       state.discoverLastAddedAt = mode === "discover" ? Date.now() : 0;
       state.discoverLastCardOpenedAt = mode === "discover" ? Date.now() : 0;
       state.discoverLastBrowseAt = mode === "discover" ? Date.now() : 0;
