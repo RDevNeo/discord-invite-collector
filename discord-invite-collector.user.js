@@ -69,6 +69,7 @@
   let discoverLanguageFailures = 0;
   let discoverLanguageEnforcementOff = false;
   let discoverLanguageOptionsCaptured = false;
+  let memberListToggleLabel = "";
 
   const ICONS = {
     play: `
@@ -1410,16 +1411,15 @@
       "[aria-haspopup='dialog']",
       "[aria-haspopup='menu']",
     ].join(", ");
-    const roots = [
-      document.querySelector('nav[aria-label$="(server)"]'),
-      document.querySelector("header"),
-    ].filter(Boolean);
+    const roots = [getServerNav(), document.querySelector("header")].filter(Boolean);
 
     for (const root of roots) {
       for (const element of root.querySelectorAll(selectors)) {
         if (!(element instanceof HTMLElement)) continue;
         if (!isVisible(element)) continue;
         if (element.closest("#dic-panel")) continue;
+        // Never a channel-list entry: those live in a tree, whatever it is labelled.
+        if (element.closest('[role="tree"]')) continue;
         if (element.closest('ul[aria-label="Channels"]')) continue;
 
         const rect = element.getBoundingClientRect();
@@ -1438,7 +1438,7 @@
       }
     }
 
-    const serverNav = document.querySelector('nav[aria-label$="(server)"], nav[aria-label*="server"]');
+    const serverNav = getServerNav();
     const fallback = getServerHeaderInviteFallback(serverNav);
     if (fallback) return fallback;
 
@@ -1910,28 +1910,46 @@
     return buttons.sort((a, b) => scoreButton(b) - scoreButton(a))[0] || null;
   }
 
-  function getServerItems() {
-    const nav = document.querySelector('nav[aria-label="Servers sidebar"]');
-    if (!nav) return [];
+  // The guild list is the one tree holding guildsnav___ entries, which is true whatever
+  // language the client runs in. The aria-label is kept only as a fallback.
+  function getGuildsTree() {
+    for (const tree of document.querySelectorAll('[role="tree"]')) {
+      if (tree.querySelector('[data-list-item-id^="guildsnav___"]')) return tree;
+    }
+    return document.querySelector('nav[aria-label="Servers sidebar"] [role="tree"]');
+  }
 
-    const tree = nav.querySelector('[role="tree"]');
+  // Discord shows the guild's real name in a drag-and-drop attribute, which beats reading
+  // textContent and then stripping localized "Unread messages, " style prefixes.
+  function getGuildItemName(item, label) {
+    const dndName = item.querySelector("[data-dnd-name]")?.getAttribute("data-dnd-name");
+    if (dndName) return normalizeInlineText(dndName);
+
+    return normalizeInlineText(
+      label.replace(/^Unread messages, /, "").replace(/^\d+ mentions?, /, ""),
+    );
+  }
+
+  function getServerItems() {
+    const tree = getGuildsTree();
     if (!tree) return [];
 
     const items = tree.querySelectorAll('[role="treeitem"]');
     const servers = [];
-    const skip = ["Direct Messages", "Add a Server", "Discover", "Download Apps"];
 
     for (const item of items) {
       const label = (item.textContent || "").trim();
       const dataId = item.getAttribute("data-list-item-id") || "";
 
-      if (skip.some((entry) => label.startsWith(entry))) continue;
       if (item.getAttribute("aria-expanded") !== null) continue;
       if (!dataId.startsWith("guildsnav___")) continue;
 
-      const name = label.replace(/^Unread messages, /, "").replace(/^\d+ mentions?, /, "");
+      // Only real guilds carry a numeric snowflake here, so this drops the DM, Discover
+      // and "add a server" entries without naming any of them.
       const guildId = dataId.replace("guildsnav___", "");
-      servers.push({ name, element: item, guildId });
+      if (!/^\d+$/.test(guildId)) continue;
+
+      servers.push({ name: getGuildItemName(item, label), element: item, guildId });
     }
 
     return servers;
@@ -1962,18 +1980,80 @@
     return total > 0 ? total : null;
   }
 
+  // Ranking only, never a gate: an English or Portuguese client is recognised straight
+  // away, and any other language still works via the click-and-check loop below.
+  const MEMBER_LIST_LABEL_PATTERN = /member|membro|miembro|membre|mitglied|utente|lid|czlonk|участник|メンバー|멤버|成员/i;
+
+  function getMemberListToggleCandidates() {
+    const seen = new Set();
+    const candidates = [];
+
+    for (const element of document.querySelectorAll('button, [role="button"]')) {
+      if (!(element instanceof HTMLElement)) continue;
+      if (seen.has(element)) continue;
+      if (!isVisible(element)) continue;
+      if (element.closest("#dic-panel")) continue;
+      if (element.closest('[role="dialog"]')) continue;
+
+      // The toggle lives in the channel header strip along the top of the page.
+      const rect = element.getBoundingClientRect();
+      if (rect.top < 0 || rect.top > 120) continue;
+
+      seen.add(element);
+      candidates.push({ element, label: getTextLike(element) || "" });
+    }
+
+    return candidates.sort((a, b) => {
+      const score = (item) => {
+        // Whatever worked last time is tried first, so the probing below is paid once per
+        // session rather than once per server.
+        if (memberListToggleLabel && item.label === memberListToggleLabel) return 2;
+        return MEMBER_LIST_LABEL_PATTERN.test(item.label) ? 1 : 0;
+      };
+      const byScore = score(b) - score(a);
+      if (byScore) return byScore;
+      // Discord puts the member-list toggle towards the right of the header.
+      return b.element.getBoundingClientRect().left - a.element.getBoundingClientRect().left;
+    });
+  }
+
+  // Verify by the effect rather than the label: click a candidate and keep it only if the
+  // member list actually appeared, undoing anything else it opened.
   async function ensureMemberListOpen() {
     if (stopRequested) return;
+    if (getMemberListContainer()) return;
 
-    const btn = document.querySelector('button[aria-label="Show Member List"]');
-    if (btn) {
-      btn.click();
-      await sleep(800);
+    for (const candidate of getMemberListToggleCandidates()) {
+      if (stopRequested) return;
+
+      dispatchHumanClick(candidate.element);
+      const opened = await waitFor(() => getMemberListContainer(), 1200, 100);
+      if (opened) {
+        memberListToggleLabel = candidate.label;
+        await sleep(500);
+        return;
+      }
+
+      // Wrong button: put the UI back before trying the next one.
+      dispatchHumanClick(candidate.element);
+      await closeAllPopups();
+      await sleep(150);
     }
   }
 
+  // The channel sidebar is the nav holding a tree that is not the guild list. Falls back to
+  // the localized "(server)" aria-label so nothing regresses if the structure shifts.
+  function getServerNav() {
+    const guildsTree = getGuildsTree();
+    for (const nav of document.querySelectorAll("nav")) {
+      if (guildsTree && nav.contains(guildsTree)) continue;
+      if (nav.querySelector('[role="tree"]')) return nav;
+    }
+    return document.querySelector('nav[aria-label$="(server)"], nav[aria-label*="server"]');
+  }
+
   function getServerNameFromHeader() {
-    const nav = document.querySelector('nav[aria-label$="(server)"]');
+    const nav = getServerNav();
     if (!nav) return null;
 
     const h2 = nav.querySelector("h2");
@@ -3057,8 +3137,7 @@
   }
 
   async function collectSidebarInviteUrls() {
-    const nav = document.querySelector('nav[aria-label="Servers sidebar"]');
-    const tree = nav?.querySelector('[role="tree"]');
+    const tree = getGuildsTree();
 
     if (tree) {
       for (const folder of tree.querySelectorAll('[role="treeitem"][aria-expanded="false"]')) {
