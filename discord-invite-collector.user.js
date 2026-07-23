@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discord Invite Collector
 // @namespace    https://github.com/RDevNeo/discord-invite-collector
-// @version      1.10.9
+// @version      1.10.10
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @author       RDevNeo
 // @homepageURL  https://github.com/RDevNeo/discord-invite-collector
@@ -21,7 +21,7 @@
   const DISCOVER_URL_PATH = "/discovery/servers";
   const DISCOVER_RESULTS_URL = "https://discord.com/servers";
   const DISCOVER_LANGUAGE_LABEL = "Português do Brasil";
-  const SCRIPT_VERSION = "1.10.9";
+  const SCRIPT_VERSION = "1.10.10";
 
   const DISCOVER_DRY_STREAK_LIMIT = 4;
 
