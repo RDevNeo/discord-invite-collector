@@ -20,7 +20,37 @@
   const DISCOVER_URL = "https://discord.com/discovery/servers";
   const DISCOVER_URL_PATH = "/discovery/servers";
   const DISCOVER_RESULTS_URL = "https://discord.com/servers";
-  const DISCOVER_LANGUAGE_LABEL = "Português do Brasil";
+  // Empty means "leave Discord's language filter alone", which is the default: it is the
+  // only setting guaranteed to work for every user regardless of their Discord locale.
+  const DISCOVER_LANGUAGE_ANY = "";
+
+  // Seed list for the panel dropdown before the user has ever loaded Discover. Discord
+  // labels these in their own language, so the labels are the same whatever UI language
+  // the user runs. The real list replaces this the first time we read Discord's own
+  // combobox, so a wrong or missing entry here is self-correcting.
+  const DISCOVER_LANGUAGE_SEED_OPTIONS = [
+    "English",
+    "Português do Brasil",
+    "Español",
+    "Français",
+    "Deutsch",
+    "Italiano",
+    "Nederlands",
+    "Polski",
+    "Русский",
+    "日本語",
+    "한국어",
+    "中文",
+    "Dansk",
+    "Čeština",
+    "Magyar",
+  ];
+
+  // Enforcing a language costs a combobox round-trip per card, and Discord occasionally
+  // renders the filter late or not at all. Rather than restarting the flow forever, give
+  // up after this many failures and keep scanning with whatever Discover is showing.
+  const DISCOVER_LANGUAGE_FAILURE_LIMIT = 3;
+
   const SCRIPT_VERSION = "1.10.10";
 
   const DISCOVER_DRY_STREAK_LIMIT = 4;
@@ -36,6 +66,9 @@
   let stopRequested = false;
   let restartTimer = null;
   let discoverWatchdogTimer = null;
+  let discoverLanguageFailures = 0;
+  let discoverLanguageEnforcementOff = false;
+  let discoverLanguageOptionsCaptured = false;
 
   const ICONS = {
     play: `
@@ -125,6 +158,8 @@
       running: false,
       collectorMode: "sidebar",
       discoverQuery: "",
+      discoverLanguage: DISCOVER_LANGUAGE_ANY,
+      discoverLanguageOptions: [],
       discoverPhase: "idle",
       discoverSearchReady: false,
       discoverVisitedCardKeys: [],
@@ -169,6 +204,54 @@
   function getDiscoverQuery() {
     const state = loadState();
     return String(state.discoverQuery || "").trim();
+  }
+
+  function getDiscoverLanguage() {
+    const state = loadState();
+    return String(state.discoverLanguage || DISCOVER_LANGUAGE_ANY).trim();
+  }
+
+  function setDiscoverLanguage(label) {
+    const state = loadState();
+    state.discoverLanguage = String(label || DISCOVER_LANGUAGE_ANY).trim();
+    saveState(state);
+    discoverLanguageFailures = 0;
+    discoverLanguageEnforcementOff = false;
+    refreshUI();
+  }
+
+  function getDiscoverLanguageChoices() {
+    const state = loadState();
+    const stored = Array.isArray(state.discoverLanguageOptions) ? state.discoverLanguageOptions : [];
+    const cleaned = stored.map((entry) => normalizeInlineText(entry)).filter(Boolean);
+    const choices = cleaned.length ? cleaned : DISCOVER_LANGUAGE_SEED_OPTIONS.slice();
+
+    // A language chosen from a previous, longer list must stay selectable, otherwise the
+    // dropdown would silently reset the user's choice to "Any".
+    const selected = getDiscoverLanguage();
+    if (selected && !choices.some((entry) => discoverLanguageMatches(entry, selected))) {
+      choices.push(selected);
+    }
+
+    return choices;
+  }
+
+  // Discord's own filter is the only authority on which languages exist and how they are
+  // spelled, so mirror whatever it offers instead of shipping a list of our own to drift.
+  function rememberDiscoverLanguageOptions(labels) {
+    const cleaned = [...new Set((labels || []).map((entry) => normalizeInlineText(entry)).filter(Boolean))];
+    if (cleaned.length < 2) return false;
+
+    const state = loadState();
+    const previous = Array.isArray(state.discoverLanguageOptions) ? state.discoverLanguageOptions : [];
+    if (previous.length === cleaned.length && previous.every((entry, i) => entry === cleaned[i])) {
+      return false;
+    }
+
+    state.discoverLanguageOptions = cleaned;
+    saveState(state);
+    refreshUI();
+    return true;
   }
 
   function normalizeDiscoverSearchValue(value) {
@@ -443,19 +526,25 @@
       .toLowerCase();
   }
 
-  function discoverLanguageMatches(value, targetLabel = DISCOVER_LANGUAGE_LABEL) {
+  // Compare on letters and digits alone, so spacing and punctuation around an otherwise
+  // identical label cannot cause a false mismatch. Labels come from Discord's own list, so
+  // no table of per-language spellings is needed on top of that.
+  function languageComparisonKey(value) {
+    return normalizeLanguageText(value).replace(/[^\p{L}\p{N}]+/gu, "");
+  }
+
+  function discoverLanguageMatches(value, targetLabel) {
     const normalized = normalizeLanguageText(value);
     const target = normalizeLanguageText(targetLabel);
-    if (!normalized) return false;
-    return (
-      normalized === target ||
-      normalized === "portugues brasil" ||
-      normalized === "portugues (brasil)" ||
-      normalized === "portuguese brazil" ||
-      normalized === "portuguese (brazil)" ||
-      normalized === "pt-br" ||
-      normalized === "pt br"
-    );
+    if (!normalized || !target) return false;
+    if (normalized === target) return true;
+
+    // Deliberately exact: a prefix match would let "Português" satisfy a request for
+    // "Português do Brasil" and silently scan the wrong language. A genuine mismatch is
+    // better, because it is reported and falls back to leaving the filter untouched.
+    const valueKey = languageComparisonKey(value);
+    const targetKey = languageComparisonKey(targetLabel);
+    return Boolean(valueKey) && valueKey === targetKey;
   }
 
   function getLabelledByText(element) {
@@ -499,6 +588,7 @@
       /preferred language|idioma preferido|idioma de preferencia|linguagem preferida|\blanguage\b|\bidioma\b|\blinguagem\b/i;
     const nonLanguageLabelPattern =
       /category|categoria|sort|order|ordenar|classification|classifica/i;
+    const selectedLanguage = getDiscoverLanguage();
     const scored = [];
 
     for (const input of inputs) {
@@ -514,7 +604,7 @@
       if (languageLabelPattern.test(directLabelText)) score += 180;
       else if (languageLabelPattern.test(contextText)) score += 70;
       if (valueText && valuePattern.test(valueText)) score += 35;
-      if (discoverLanguageMatches(valueText)) score += 75;
+      if (selectedLanguage && discoverLanguageMatches(valueText, selectedLanguage)) score += 75;
       if (nonLanguageLabelPattern.test(directLabelText)) score -= 180;
       else if (nonLanguageLabelPattern.test(contextText)) score -= 60;
 
@@ -634,12 +724,39 @@
     );
   }
 
-  async function ensureDiscoverLanguage(targetLabel = DISCOVER_LANGUAGE_LABEL) {
+  // Stop trying to pin the language and let the scan continue on whatever Discover shows.
+  // Reported as a warning rather than an error: the results are still usable, just not
+  // filtered the way the user asked.
+  function abandonDiscoverLanguageEnforcement(reason) {
+    if (discoverLanguageEnforcementOff) return true;
+    discoverLanguageEnforcementOff = true;
+    log(`${reason} Continuing without the language filter — pick "Any language" to silence this.`);
+    return true;
+  }
+
+  // A missing or unresponsive combobox is usually Discord rendering late, so a restart is
+  // worth trying. Repeating it forever is not, which is what used to happen.
+  function noteDiscoverLanguageFailure(reason) {
+    discoverLanguageFailures += 1;
+    if (discoverLanguageFailures >= DISCOVER_LANGUAGE_FAILURE_LIMIT) {
+      return abandonDiscoverLanguageEnforcement(
+        `${reason} Gave up after ${discoverLanguageFailures} attempts.`,
+      );
+    }
+
+    log(reason);
+    requestFlowRestart(reason);
+    return false;
+  }
+
+  async function ensureDiscoverLanguage(targetLabel = getDiscoverLanguage()) {
+    if (!targetLabel || discoverLanguageEnforcementOff) return true;
+
     const combobox = await waitFor(() => getDiscoverLanguageCombobox(), 8000, 150);
     if (!combobox) {
-      log(`Could not find the Discover language combobox for "${targetLabel}".`);
-      requestFlowRestart("Could not find the Discover language combobox.");
-      return false;
+      return noteDiscoverLanguageFailure(
+        `Could not find the Discover language filter for "${targetLabel}".`,
+      );
     }
 
     const currentValue = normalizeInlineText(combobox.value || "");
@@ -649,10 +766,14 @@
 
     const opened = await openDiscoverLanguageCombobox(combobox);
     if (!opened) {
-      log(`Could not open the Discover language combobox for "${targetLabel}".`);
-      requestFlowRestart("Could not open the Discover language combobox.");
-      return false;
+      return noteDiscoverLanguageFailure(
+        `Could not open the Discover language filter for "${targetLabel}".`,
+      );
     }
+
+    // Read the list before any typing narrows it, so the panel dropdown mirrors every
+    // language Discord actually offers.
+    rememberDiscoverLanguageOptions(getDiscoverLanguageOptions().map((item) => item.text));
 
     if (
       !getDiscoverLanguageOptions().some((item) => discoverLanguageMatches(item.text, targetLabel))
@@ -673,20 +794,16 @@
           100,
         );
         if (!selected) {
-          log(`Timed out waiting for Discover language "${targetLabel}" to apply.`);
-          requestFlowRestart(`Discover language "${targetLabel}" did not apply.`);
-          return false;
+          await restoreDiscoverLanguageCombobox(combobox, currentValue);
+          return noteDiscoverLanguageFailure(`Discover language "${targetLabel}" did not apply.`);
         }
+        discoverLanguageFailures = 0;
         await sleep(600);
         return true;
       }
 
       const scroller = getDiscoverLanguageOptionScroller(combobox);
-      if (!scroller) {
-        log(`Could not find the Discover language option scroller for "${targetLabel}".`);
-        requestFlowRestart("Could not find the Discover language option scroller.");
-        return false;
-      }
+      if (!scroller) break;
 
       const before = scroller.scrollTop;
       scroller.scrollTop = Math.min(scroller.scrollTop + Math.max(120, scroller.clientHeight - 40), scroller.scrollHeight);
@@ -694,21 +811,73 @@
       await sleep(150);
     }
 
-    log(`Could not find the Discover language option "${targetLabel}".`);
-    requestFlowRestart(`Could not find Discover language option "${targetLabel}".`);
-    return false;
+    // The language simply is not on Discord's list, so retrying cannot help.
+    await restoreDiscoverLanguageCombobox(combobox, currentValue);
+    return abandonDiscoverLanguageEnforcement(`Discover has no language option "${targetLabel}".`);
   }
 
-  async function verifyDiscoverLanguage(targetLabel = DISCOVER_LANGUAGE_LABEL) {
+  // Filtering types into Discord's own input. Leaving a half-typed language behind would
+  // keep its results narrowed, so put back whatever was there before giving up.
+  async function restoreDiscoverLanguageCombobox(combobox, originalValue) {
+    if (!(combobox instanceof HTMLInputElement) && !(combobox instanceof HTMLTextAreaElement)) {
+      return;
+    }
+    if (normalizeInlineText(combobox.value || "") === normalizeInlineText(originalValue || "")) {
+      return;
+    }
+
+    setNativeValue(combobox, originalValue || "");
+    combobox.dispatchEvent(new Event("input", { bubbles: true }));
+    combobox.blur();
+    await sleep(200);
+  }
+
+  async function closeDiscoverLanguageCombobox(combobox, originalValue) {
+    if (!combobox) return;
+    combobox.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+        code: "Escape",
+        keyCode: 27,
+        which: 27,
+      }),
+    );
+    await restoreDiscoverLanguageCombobox(combobox, originalValue);
+  }
+
+  // With no language pinned we never open Discord's filter, so the panel dropdown would be
+  // stuck on the seed list forever. Peek at it once per session to mirror the real options.
+  async function captureDiscoverLanguageOptions() {
+    if (discoverLanguageOptionsCaptured) return false;
+
+    const combobox = await getOptionalDiscoverLanguageCombobox();
+    if (!combobox) return false;
+
+    discoverLanguageOptionsCaptured = true;
+    const originalValue = normalizeInlineText(combobox.value || "");
+    if (!(await openDiscoverLanguageCombobox(combobox))) return false;
+
+    const captured = rememberDiscoverLanguageOptions(
+      getDiscoverLanguageOptions().map((item) => item.text),
+    );
+    await closeDiscoverLanguageCombobox(combobox, originalValue);
+    return captured;
+  }
+
+  async function verifyDiscoverLanguage(targetLabel = getDiscoverLanguage()) {
+    if (!targetLabel || discoverLanguageEnforcementOff) return true;
+
     const combobox = await waitFor(() => getDiscoverLanguageCombobox(), 5000, 150);
     const value = normalizeInlineText(combobox?.value || "");
     if (discoverLanguageMatches(value, targetLabel)) {
       return true;
     }
 
-    log(`Discover language verification failed. Current value: "${value || "unknown"}".`);
-    requestFlowRestart(`Discover language is not "${targetLabel}".`);
-    return false;
+    return noteDiscoverLanguageFailure(
+      `Discover language is "${value || "unknown"}", not "${targetLabel}".`,
+    );
   }
 
   async function getOptionalDiscoverLanguageCombobox(timeoutMs = 2500) {
@@ -1427,9 +1596,9 @@
     markDiscoverCardOpened();
     setDiscoverCardCursor(sequenceNumber);
 
-    const languageVerified = await verifyDiscoverLanguage(DISCOVER_LANGUAGE_LABEL);
+    const languageVerified = await verifyDiscoverLanguage();
     if (!languageVerified) {
-      throw new Error(`Discover language is not "${DISCOVER_LANGUAGE_LABEL}" before opening "${label}".`);
+      throw new Error(`Discover language is not "${getDiscoverLanguage()}" before opening "${label}".`);
     }
 
     await openServerFromDiscoverCard(card);
@@ -1461,11 +1630,16 @@
     const pageReady = await waitForDiscoverPageReady();
     if (!pageReady || stopRequested) return false;
 
-    const preSearchLanguageCombobox = await getOptionalDiscoverLanguageCombobox();
-    if (preSearchLanguageCombobox) {
-      const languageReady = await ensureDiscoverLanguage(DISCOVER_LANGUAGE_LABEL);
-      if (!languageReady || stopRequested) return false;
+    if (getDiscoverLanguage()) {
+      const preSearchLanguageCombobox = await getOptionalDiscoverLanguageCombobox();
+      if (preSearchLanguageCombobox) {
+        const languageReady = await ensureDiscoverLanguage();
+        if (!languageReady || stopRequested) return false;
+      }
+    } else {
+      await captureDiscoverLanguageOptions();
     }
+    if (stopRequested) return false;
 
     setDiscoverSearchReady(false);
     let state = loadState();
@@ -1479,10 +1653,10 @@
       setDiscoverSearchReady(true);
     }
 
-    const postSearchLanguageReady = await ensureDiscoverLanguage(DISCOVER_LANGUAGE_LABEL);
+    const postSearchLanguageReady = await ensureDiscoverLanguage();
     if (!postSearchLanguageReady || stopRequested) return false;
 
-    const languageVerified = await verifyDiscoverLanguage(DISCOVER_LANGUAGE_LABEL);
+    const languageVerified = await verifyDiscoverLanguage();
     if (!languageVerified || stopRequested) return false;
 
     if (!discoverSearchMatchesQuery(query)) {
@@ -1495,7 +1669,7 @@
 
       setDiscoverSearchReady(true);
 
-      const refreshedLanguageVerified = await verifyDiscoverLanguage(DISCOVER_LANGUAGE_LABEL);
+      const refreshedLanguageVerified = await verifyDiscoverLanguage();
       if (!refreshedLanguageVerified || stopRequested) return false;
     }
 
@@ -2064,6 +2238,35 @@
     refreshUI();
   }
 
+  function renderDiscoverLanguageOptions(select, running) {
+    const selected = getDiscoverLanguage();
+    const choices = getDiscoverLanguageChoices();
+    const signature = JSON.stringify(choices);
+
+    // Rebuilding on every refresh would drop the open dropdown out from under the user,
+    // and refreshUI runs often, so only touch the DOM when the list actually changed.
+    if (select.dataset.dicSignature !== signature) {
+      select.dataset.dicSignature = signature;
+      select.innerHTML = "";
+
+      const any = document.createElement("option");
+      any.value = DISCOVER_LANGUAGE_ANY;
+      any.textContent = "Any language";
+      select.appendChild(any);
+
+      for (const choice of choices) {
+        const option = document.createElement("option");
+        option.value = choice;
+        option.textContent = choice;
+        select.appendChild(option);
+      }
+    }
+
+    select.value = selected;
+    if (select.value !== selected) select.value = DISCOVER_LANGUAGE_ANY;
+    select.disabled = Boolean(running);
+  }
+
   function refreshUI() {
     const state = loadState();
     const mode = getCollectorMode();
@@ -2076,6 +2279,8 @@
     const modeSelect = document.getElementById("dic-mode");
     const discoverRow = document.getElementById("dic-discover-row");
     const discoverInput = document.getElementById("dic-discover-query");
+    const languageRow = document.getElementById("dic-discover-language-row");
+    const languageSelect = document.getElementById("dic-discover-language");
     const status = document.getElementById("dic-status");
     const logEl = document.getElementById("dic-log");
     const countEl = document.getElementById("dic-count");
@@ -2102,6 +2307,8 @@
     if (modeSelect) modeSelect.value = mode;
     if (discoverRow) discoverRow.style.display = mode === "discover" ? "block" : "none";
     if (discoverInput) discoverInput.value = state.discoverQuery || "";
+    if (languageRow) languageRow.style.display = mode === "discover" ? "block" : "none";
+    if (languageSelect) renderDiscoverLanguageOptions(languageSelect, state.running);
     if (status) status.textContent = "";
     if (countEl) {
       countEl.textContent = `${(state.inviteUrls || []).length}`;
@@ -2327,11 +2534,13 @@
           padding: 12px;
         }
         #dic-mode-row,
-        #dic-discover-row {
+        #dic-discover-row,
+        #dic-discover-language-row {
           margin-bottom: 10px;
         }
         #dic-mode-label,
-        #dic-discover-label {
+        #dic-discover-label,
+        #dic-discover-language-label {
           display: block;
           font-size: 11px;
           font-weight: 600;
@@ -2339,6 +2548,7 @@
           margin-bottom: 5px;
         }
         #dic-mode,
+        #dic-discover-language,
         #dic-discover-query {
           width: 100%;
           border: 1px solid var(--dic-input);
@@ -2352,6 +2562,7 @@
           transition: border-color .15s ease, box-shadow .15s ease;
         }
         #dic-mode:focus,
+        #dic-discover-language:focus,
         #dic-discover-query:focus {
           border-color: var(--dic-ring);
           box-shadow: 0 0 0 3px color-mix(in oklab, var(--dic-ring) 25%, transparent);
@@ -2596,6 +2807,10 @@
           <label id="dic-discover-label" for="dic-discover-query">Search</label>
           <input id="dic-discover-query" type="text" placeholder="ex: blox fruits" autocomplete="off" spellcheck="false" />
         </div>
+        <div id="dic-discover-language-row" style="display:none">
+          <label id="dic-discover-language-label" for="dic-discover-language">Language</label>
+          <select id="dic-discover-language"></select>
+        </div>
         <div id="dic-actions">
           <button class="dic-btn dic-icon-btn" id="dic-start" aria-label="Start"></button>
           <button class="dic-btn dic-icon-btn" id="dic-stop" disabled aria-label="Pause"></button>
@@ -2639,6 +2854,7 @@
     const minimizeButton = panel.querySelector("#dic-minimize");
     const toggleSizeButton = panel.querySelector("#dic-toggle-size");
     const modeSelect = panel.querySelector("#dic-mode");
+    const languageSelect = panel.querySelector("#dic-discover-language");
     const discoverInput = panel.querySelector("#dic-discover-query");
     let minimized = false;
     let compact = false;
@@ -2673,6 +2889,7 @@
       if (!minimized) panel.style.width = compact ? "340px" : "460px";
     };
     modeSelect.onchange = () => setCollectorMode(modeSelect.value);
+    languageSelect.onchange = () => setDiscoverLanguage(languageSelect.value);
     discoverInput.oninput = () => setDiscoverQuery(discoverInput.value);
     discoverInput.onkeydown = (e) => {
       if (e.key === "Enter") {
@@ -2893,6 +3110,10 @@
   async function startCollection() {
     try {
       stopRequested = false;
+      // A new run deserves a fresh attempt at the language filter, even if the last one
+      // gave up on it.
+      discoverLanguageFailures = 0;
+      discoverLanguageEnforcementOff = false;
 
       const state = loadState();
       const mode = getCollectorMode();

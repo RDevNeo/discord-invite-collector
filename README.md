@@ -23,7 +23,7 @@ Discord desktop app, which has no userscript support.
 | Mode | What it does |
 | --- | --- |
 | **Sidebar** | Walks every server in the sidebar, opens each member profile and reads invites from status, bio and profile links. |
-| **Discover** | Searches Discord's Discover page for a term, opens each result and copies the invite URL from the "Invite to Server" dialog. |
+| **Discover** | Searches Discord's Discover page for a term, opens each result and copies the invite URL from the "Invite to Server" dialog. A **Language** dropdown pins Discord's language filter; it defaults to *Any language*, which leaves the filter untouched. |
 | **Reader** | Scrolls the current channel upward and collects invite URLs found in messages. |
 
 Invite URLs are normalized to `https://discord.gg/<code>` and de-duplicated within the session. The log
