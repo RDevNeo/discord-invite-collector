@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discord Invite Collector
 // @namespace    spokpay-crm
-// @version      1.10.7
+// @version      1.10.8
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @match        https://discord.com/*
 // @match        https://*.discord.com/*
@@ -18,7 +18,12 @@
   const DISCOVER_URL_PATH = "/discovery/servers";
   const DISCOVER_RESULTS_URL = "https://discord.com/servers";
   const DISCOVER_LANGUAGE_LABEL = "Português do Brasil";
-  const SCRIPT_VERSION = "1.10.7";
+  const SCRIPT_VERSION = "1.10.8";
+
+  const DISCOVER_CATEGORY_LABEL_PATTERN =
+    /^(search results.*|filters?|all|gaming|general chatting|entertainment|anime(?: & manga)?|memes?|art|content creator|fandom|music|education|science & tech|student hubs)$/i;
+  const DISCOVER_NAV_LABEL_PATTERN =
+    /^(home|servers|quests|apps|download(?: apps)?|friends|nitro|voice settings|output device)$/i;
 
   const LS_KEY = "discord_invite_url_collector_state";
   let _memState = null;
@@ -945,10 +950,12 @@
 
       const text = getTextLike(element).replace(/\s+/g, " ").trim();
       if (text.length < 8) continue;
-      if (/search results|filters|all|gaming|general chatting|entertainment|anime|meme/i.test(text))
-        continue;
-      if (/home|servers|quests|apps|download|friends|nitro|voice settings|output device/i.test(text))
-        continue;
+      // These are Discover's own chrome: category chips and nav entries. Match them as
+      // whole labels — a substring test discards real servers, because every result of a
+      // search for "anime" contains "anime", and "all" hits "wall", "really", "Small".
+      const chromeLabel = text.replace(/[\d.,]+$/, "").trim();
+      if (DISCOVER_CATEGORY_LABEL_PATTERN.test(chromeLabel)) continue;
+      if (DISCOVER_NAV_LABEL_PATTERN.test(chromeLabel)) continue;
       const hasCardSignals =
         /online|members|servidor|server|community|comunidade|trading|trade|discord/i.test(text) ||
         element.querySelector("h1, h2, h3, h4, [role='heading']");
