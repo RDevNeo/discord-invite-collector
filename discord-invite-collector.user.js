@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Discord Invite Collector
-// @namespace    discord-invite-collector
+// @namespace    spokpay-crm
 // @version      1.10.3
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @match        https://discord.com/*
