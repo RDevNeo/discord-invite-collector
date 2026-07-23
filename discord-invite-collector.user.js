@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Discord Invite Collector
 // @namespace    spokpay-crm
-// @version      1.10.6
+// @version      1.10.7
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
 // @match        https://discord.com/*
 // @match        https://*.discord.com/*
@@ -18,7 +18,7 @@
   const DISCOVER_URL_PATH = "/discovery/servers";
   const DISCOVER_RESULTS_URL = "https://discord.com/servers";
   const DISCOVER_LANGUAGE_LABEL = "Português do Brasil";
-  const SCRIPT_VERSION = "1.10.6";
+  const SCRIPT_VERSION = "1.10.7";
 
   const LS_KEY = "discord_invite_url_collector_state";
   let _memState = null;
@@ -589,6 +589,40 @@
     );
   }
 
+  // Discord's language filter is a searchable combobox over a virtualized list, and the
+  // languages are ordered so that scrolling to a far-down one is unreliable. Typing a
+  // prefix filters the list down to it in one step ("portug" -> Português, Português do
+  // Brasil), which is how a person would reach it too.
+  function buildDiscoverLanguageFilterQuery(targetLabel) {
+    const normalized = normalizeLanguageText(targetLabel);
+    const firstWord = normalized.split(" ")[0] || normalized;
+    return firstWord.slice(0, 6);
+  }
+
+  async function filterDiscoverLanguageOptions(combobox, targetLabel) {
+    if (!(combobox instanceof HTMLInputElement) && !(combobox instanceof HTMLTextAreaElement)) {
+      return false;
+    }
+
+    const query = buildDiscoverLanguageFilterQuery(targetLabel);
+    if (!query) return false;
+
+    combobox.focus();
+    setNativeValue(combobox, query);
+    combobox.dispatchEvent(new Event("input", { bubbles: true }));
+
+    return Boolean(
+      await waitFor(
+        () =>
+          getDiscoverLanguageOptions().some((item) =>
+            discoverLanguageMatches(item.text, targetLabel),
+          ),
+        3000,
+        100,
+      ),
+    );
+  }
+
   async function ensureDiscoverLanguage(targetLabel = DISCOVER_LANGUAGE_LABEL) {
     const combobox = await waitFor(() => getDiscoverLanguageCombobox(), 8000, 150);
     if (!combobox) {
@@ -607,6 +641,12 @@
       log(`Could not open the Discover language combobox for "${targetLabel}".`);
       requestFlowRestart("Could not open the Discover language combobox.");
       return false;
+    }
+
+    if (
+      !getDiscoverLanguageOptions().some((item) => discoverLanguageMatches(item.text, targetLabel))
+    ) {
+      await filterDiscoverLanguageOptions(combobox, targetLabel);
     }
 
     for (let attempt = 0; attempt < 20; attempt += 1) {
