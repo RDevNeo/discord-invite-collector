@@ -34,8 +34,8 @@ For every candidate it:
 - **Index** (Discover cursor) and **Collected** stat tiles
 - A log pane that shows only collected invite URLs and failures, with copy and clear buttons
 
-Styling follows the SpokPay design system tokens (near-black violet dark theme), scoped to the panel
-via CSS custom properties so it does not leak into Discord's own styles.
+Styling is a near-black violet dark theme, scoped to the panel via CSS custom properties so it does not
+leak into Discord's own styles.
 
 ## Important behavior
 

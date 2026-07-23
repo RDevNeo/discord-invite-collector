@@ -2490,7 +2490,8 @@
     panel.id = "dic-panel";
     panel.innerHTML = `
       <style>
-        /* Design tokens mirrored from the SpokPay design system (src/styles.css). */
+        /* Panel-scoped design tokens. Everything is namespaced under #dic-panel and
+           --dic-*, so nothing here can leak into Discord's own styles. */
         #dic-panel {
           --dic-radius: 0.75rem;
           --dic-radius-sm: calc(var(--dic-radius) - 4px);
