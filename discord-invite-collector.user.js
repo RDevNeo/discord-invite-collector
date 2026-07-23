@@ -91,6 +91,7 @@
   let discoverLanguageFailures = 0;
   let discoverLanguageEnforcementOff = false;
   let memberListToggleLabel = "";
+  let inviteButtonLabel = "";
 
   const ICONS = {
     play: `
@@ -1133,9 +1134,16 @@
       const chromeLabel = text.replace(/[\d.,]+$/, "").trim();
       if (DISCOVER_CATEGORY_LABEL_PATTERN.test(chromeLabel)) continue;
       if (DISCOVER_NAV_LABEL_PATTERN.test(chromeLabel)) continue;
+      // A server card carries a name and a member/online count. The heading and the count
+      // are structural, so they hold in every language; the English and Portuguese words
+      // are just extra evidence for cards that render neither.
+      // Deliberately a count, not any digit: "1,234", "12.3K", "500K" — never a stray "5"
+      // out of a server name, which would let Discover's own chrome through as a card.
+      const hasMemberCount = /\d[\d.,]{2,}|\d+([.,]\d+)?\s*[KkMm]\b/.test(text);
       const hasCardSignals =
-        /online|members|servidor|server|community|comunidade|trading|trade|discord/i.test(text) ||
-        element.querySelector("h1, h2, h3, h4, [role='heading']");
+        element.querySelector("h1, h2, h3, h4, [role='heading']") ||
+        hasMemberCount ||
+        /online|members|servidor|server|community|comunidade|trading|trade|discord/i.test(text);
       if (!hasCardSignals) continue;
 
       const clickable = element.closest("a[href], [role='link']");
@@ -1365,8 +1373,14 @@
     return fallback || cardElement;
   }
 
+  // An invite dialog is one that contains an invite URL, which is true in every language.
+  // The word "invite" is only a fallback for the moment before the link has rendered.
   function getInviteDialog() {
     const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+
+    const withInvite = dialogs.find((dialog) => dialogContainsInvite(dialog));
+    if (withInvite) return withInvite;
+
     return (
       dialogs.find((dialog) => {
         const text = (dialog.textContent || "").toLowerCase();
@@ -1375,106 +1389,90 @@
     );
   }
 
-  function getInviteToServerButton() {
-    const needles = [
-      "Invite to Server",
-      "Invite this server",
-      "Invite to this server",
-      "Invite to server",
-      "Invite People",
-      "Invite people",
-      "Invite friends",
-      "Invite friends to server",
-      "Invite friends to this server",
-      "Invite server members",
-      "Invite members",
-      "Convidar para o servidor",
-      "Convidar pessoas",
-      "Invite",
-      "Convidar",
-    ];
-    const selectors = [
-      '[aria-label="Invite to Server"]',
-      '[aria-label^="Invite to Server"]',
-      '[aria-label="Invite people"]',
-      '[aria-label="Invite People"]',
-      '[aria-label="Convidar para o servidor"]',
-      "button",
-      "[role='button']",
-      "[aria-haspopup='dialog']",
-      "[aria-haspopup='menu']",
-    ].join(", ");
-    const roots = [getServerNav(), document.querySelector("header")].filter(Boolean);
+  function dialogContainsInvite(dialog) {
+    if (!dialog) return false;
+    if (extractInviteUrls(dialog.textContent || "").length > 0) return true;
+
+    for (const input of dialog.querySelectorAll("input, textarea")) {
+      const value = "value" in input ? input.value : input.textContent || "";
+      if (extractInviteUrls(value || "").length > 0) return true;
+    }
+
+    for (const anchor of dialog.querySelectorAll("a[href]")) {
+      if (normalizeInvite(anchor.href || anchor.getAttribute("href") || "")) return true;
+    }
+
+    return false;
+  }
+
+  // "Invite" in the languages Discord ships, plus the shared Latin stems. Used only to
+  // rank candidates: a client in a language missing here still works, because the button
+  // is confirmed by whether clicking it opens a dialog containing an invite link.
+  const INVITE_LABEL_PATTERN =
+    /invit|convid|convit|einladen|einladung|uitnod|zaproś|zapros|pozvat|pozvánk|pozvan|pozov|pozvi|invita|convite|davet|bjud|invitér|kutsu|povabi|convoc|meghív|kviest|kvies|приглас|запрос|запрош|покан|πρόσκλ|προσκαλ|招待|초대|邀请|邀請|เชิญ|मंत्रण|आमंत्र|undang|mời/i;
+
+  // Things that sit in the same header band but are never the server invite.
+  const INVITE_LABEL_EXCLUSION_PATTERN =
+    /invite to channel|convidar para o canal|edit channel|editar canal|\bchannel\b|\bcanal\b|join|joined|preview|entrar|participar/i;
+
+  function describeElement(element) {
+    return normalizeInlineText(
+      [
+        element.getAttribute("aria-label"),
+        element.getAttribute("title"),
+        getLabelledByText(element),
+        getTextLike(element),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+  }
+
+  // Ranked rather than filtered: every plausible header control is returned, best first,
+  // so the caller can click through them until one actually opens an invite dialog.
+  function getInviteButtonCandidates() {
+    const roots = [getServerNav(), document.querySelector("header"), document.body].filter(Boolean);
+    const seen = new Set();
+    const scored = [];
 
     for (const root of roots) {
-      for (const element of root.querySelectorAll(selectors)) {
+      for (const element of root.querySelectorAll("button, [role='button'], [aria-haspopup='dialog'], [aria-haspopup='menu']")) {
         if (!(element instanceof HTMLElement)) continue;
+        if (seen.has(element)) continue;
         if (!isVisible(element)) continue;
         if (element.closest("#dic-panel")) continue;
         // Never a channel-list entry: those live in a tree, whatever it is labelled.
         if (element.closest('[role="tree"]')) continue;
         if (element.closest('ul[aria-label="Channels"]')) continue;
+        if (element.closest('[role="dialog"]')) continue;
 
         const rect = element.getBoundingClientRect();
         if (rect.top < 0 || rect.top > 220) continue;
 
-        const label = getTextLike(element);
-        if (!label) continue;
+        seen.add(element);
 
-        if (!needles.some((needle) => label.toLowerCase().includes(needle.toLowerCase()))) continue;
-        if (/invite to channel/i.test(label)) continue;
-        if (/edit channel/i.test(label)) continue;
-        if (/channel/i.test(label)) continue;
-        if (/join|joined|preview/i.test(label)) continue;
+        const label = describeElement(element);
 
-        return element;
+        let score = 0;
+        if (INVITE_LABEL_PATTERN.test(label)) score += 200;
+        // Demoted, not dropped. These labels are wrong in the languages listed, but the
+        // list cannot cover every language, and clicking is verified by its effect — so a
+        // mistake here costs a wasted click at the end of the queue, not a missed server.
+        if (INVITE_LABEL_EXCLUSION_PATTERN.test(label)) score -= 300;
+        // Whatever opened the dialog last time is almost certainly it again.
+        if (inviteButtonLabel && label && label === inviteButtonLabel) score += 400;
+        if (element.getAttribute("aria-haspopup") === "dialog") score += 60;
+        if (element.querySelector("svg")) score += 20;
+        if (!label) score += 10;
+        if (getServerNav()?.contains(element)) score += 40;
+
+        scored.push({ element, label, score });
       }
     }
 
-    const serverNav = getServerNav();
-    const fallback = getServerHeaderInviteFallback(serverNav);
-    if (fallback) return fallback;
-
-    return null;
-  }
-
-  function getServerHeaderInviteFallback(serverNav) {
-    if (!(serverNav instanceof HTMLElement)) return null;
-
-    const candidates = [...serverNav.querySelectorAll("button, [role='button']")].filter(
-      (element) => element instanceof HTMLElement && isVisible(element),
-    );
-
-    const exactLabel = candidates.find((element) => {
-      const rect = element.getBoundingClientRect();
-      if (rect.top < 0 || rect.top > 220) return false;
-      const text = getTextLike(element).replace(/\s+/g, " ").trim().toLowerCase();
-      return text.includes("invite to server") || text.includes("invite people") || text.includes("convidar");
-    });
-    if (exactLabel) return exactLabel;
-
-    const iconButton = candidates.find((element) => {
-      const rect = element.getBoundingClientRect();
-      if (rect.top < 0 || rect.top > 220) return false;
-      const label = [
-        element.getAttribute("aria-label"),
-        element.getAttribute("title"),
-        getTextLike(element),
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .trim()
-        .toLowerCase();
-
-      if (label.includes("invite to channel") || label.includes("edit channel")) return false;
-      if (label.includes("invite to server") || label.includes("invite people") || label.includes("convidar")) {
-        return true;
-      }
-
-      return !element.getAttribute("aria-label") && !element.getAttribute("title") && !getTextLike(element) && !!element.querySelector("svg");
-    });
-
-    return iconButton || null;
+    return scored
+      .sort((a, b) => b.score - a.score || a.element.getBoundingClientRect().top - b.element.getBoundingClientRect().top)
+      .slice(0, 8);
   }
 
   async function extractInviteFromDialog(dialog) {
@@ -1540,30 +1538,67 @@
     return true;
   }
 
+  // Click a candidate and decide by what happens, not by what it was labelled. Anything
+  // that is not an invite dialog gets closed again before the next candidate is tried.
+  async function openInviteDialogVia(candidate) {
+    dispatchHumanClick(candidate.element);
+
+    const dialog = await waitFor(() => {
+      const found = getInviteDialog();
+      return found && dialogContainsInvite(found) ? found : null;
+    }, 2500, 150);
+    if (dialog) return dialog;
+
+    // Some clients need a beat before the link renders, so accept a dialog that is
+    // clearly the invite one even while it is still filling in.
+    const pending = getInviteDialog();
+    if (pending) {
+      const settled = await waitFor(() => (dialogContainsInvite(pending) ? pending : null), 2500, 150);
+      if (settled) return settled;
+    }
+
+    await closeAllPopups();
+    await sleep(250);
+    return null;
+  }
+
   async function clickInviteToServerFromServer(sourceLabel, serverName = "") {
     const resolvedServerName = extractServerNameFromLabel(serverName || sourceLabel);
     await revealServerHeaderActions(resolvedServerName);
     await sleep(350);
 
-    const inviteButton = await waitFor(() => getInviteToServerButton(), 5000);
+    let candidates = await waitFor(() => {
+      const found = getInviteButtonCandidates();
+      return found.length ? found : null;
+    }, 5000);
 
-    if (!inviteButton) {
+    if (!candidates) {
       await revealServerHeaderActions(resolvedServerName);
       await sleep(350);
+      candidates = await waitFor(() => {
+        const found = getInviteButtonCandidates();
+        return found.length ? found : null;
+      }, 3500);
     }
 
-    const retryInviteButton = inviteButton || (await waitFor(() => getInviteToServerButton(), 3500));
-
-    if (!retryInviteButton) {
-      throw new Error("Could not find the Invite to Server button.");
+    if (!candidates) {
+      throw new Error("Could not find any invite button candidates in the server header.");
     }
 
-    dispatchHumanClick(retryInviteButton);
-    await sleep(800);
+    let dialog = null;
+    for (const candidate of candidates) {
+      if (stopRequested) return false;
 
-    const dialog = await waitFor(() => getInviteDialog(), 5000);
+      dialog = await openInviteDialogVia(candidate);
+      if (dialog) {
+        // Remember the winner so later servers go straight to it instead of probing.
+        inviteButtonLabel = candidate.label || inviteButtonLabel;
+        break;
+      }
+    }
+
     if (!dialog) {
-      log("Could not find the invite dialog.");
+      log(`Could not open the invite dialog after trying ${candidates.length} header buttons.`);
       throw new Error("Could not find the invite dialog.");
     }
 

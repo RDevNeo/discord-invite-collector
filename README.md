@@ -50,6 +50,15 @@ off the page, because Discord virtualizes its language dropdown — only the opt
 exist in the DOM at any moment. If Discover does not offer the language you pick, the scan says so in
 the log and continues unfiltered instead of stopping.
 
+## Discord UI language
+
+The script drives Discord's DOM, so it prefers structural handles (roles, `data-` attributes,
+container relationships) over on-screen text, which differs per language. Where a control has no
+structural handle — the member-list toggle, the invite button — it ranks the likely candidates, clicks
+one, and keeps it only if the expected thing happened, undoing the click otherwise. Visible labels are
+scored as one signal among several, never used as the sole gate, so a language the wordlists do not
+cover costs a few extra clicks rather than failing.
+
 ## License
 
 [MIT](LICENSE).
