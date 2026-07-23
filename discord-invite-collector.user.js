@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         Discord Invite Collector
-// @namespace    spokpay-crm
+// @namespace    https://github.com/RDevNeo/discord-invite-collector
 // @version      1.10.9
 // @description  Collect Discord invite URLs from member profiles, Discover or a channel's messages.
+// @author       RDevNeo
+// @homepageURL  https://github.com/RDevNeo/discord-invite-collector
+// @supportURL   https://github.com/RDevNeo/discord-invite-collector/issues
 // @match        https://discord.com/*
 // @match        https://*.discord.com/*
 // @grant        none
-// @updateURL    https://spokpay-crm-lyart.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
-// @downloadURL  https://spokpay-crm-lyart.vercel.app/api/userscript?key=589dab264b9024eb4ec66a3ddd7e834619a226048a2b7383
+// @updateURL    https://raw.githubusercontent.com/RDevNeo/discord-invite-collector/main/discord-invite-collector.user.js
+// @downloadURL  https://raw.githubusercontent.com/RDevNeo/discord-invite-collector/main/discord-invite-collector.user.js
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -1408,7 +1411,7 @@
       throw new Error("Could not read the invite URL from the dialog.");
     }
 
-    addInviteUrls([invite], sourceLabel);
+    addInviteUrls([invite], sourceLabel, resolvedServerName || getServerNameFromHeader());
 
     await closeInviteDialogAndReturnBack(sourceLabel, resolvedServerName);
     return true;
@@ -1953,7 +1956,7 @@
 
         const invites = extractInviteUrlsFromMessage(message.element);
         if (invites.length > 0) {
-          addInviteUrls(invites, `Reader: ${channelName}`);
+          addInviteUrls(invites, `Reader: ${channelName}`, getServerNameFromHeader() || channelName);
         }
       }
 
@@ -2166,8 +2169,10 @@
     setStatus("");
   }
 
-  function addInviteUrls(urls, sourceLabel) {
+  function addInviteUrls(urls, sourceLabel, serverName = "") {
     if (!urls || !urls.length) return { added: 0, skippedInvalid: 0 };
+
+    const server = extractServerNameFromLabel(serverName) || extractServerNameFromLabel(sourceLabel);
 
     const state = loadState();
     const set = new Set(state.inviteUrls || []);
@@ -2184,7 +2189,7 @@
 
       set.add(normalized);
       added++;
-      log(`Collected invite URL from ${sourceLabel}: ${normalized}`);
+      log(`Invite collected of server: ${server || "unknown server"} — ${normalized}`);
     }
 
     if (added > 0) {
@@ -2765,7 +2770,8 @@
     await closeAllPopups();
 
     if (allInvites.length > 0) {
-      addInviteUrls(allInvites, getServerNameFromHeader() || "unknown server");
+      const memberServerName = getServerNameFromHeader() || "unknown server";
+      addInviteUrls(allInvites, memberServerName, memberServerName);
     }
   }
 

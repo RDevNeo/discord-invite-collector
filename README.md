@@ -9,9 +9,14 @@ panel and in `localStorage` until you copy or clear it.
 ## Install
 
 1. Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension.
-2. Open `discord-invite-collector.user.js` in this repo and install it (Tampermonkey recognizes the
-   `// ==UserScript==` header), or paste its contents into a new Tampermonkey script.
+2. Click
+   **[install the script](https://raw.githubusercontent.com/RDevNeo/discord-invite-collector/main/discord-invite-collector.user.js)**
+   — Tampermonkey recognizes the `// ==UserScript==` header and opens its install prompt. (Installing
+   from this URL is what registers the auto-update source; a copy-pasted script never updates itself.)
 3. Open Discord web (`https://discord.com/*`) — the collector panel is injected on load.
+
+Works on Discord **web** in any desktop browser with a userscript manager. It does not run inside the
+Discord desktop app, which has no userscript support.
 
 ## Modes
 
@@ -26,15 +31,10 @@ pane shows only collected invites and failures.
 
 ## Auto-update
 
-The userscript carries `@updateURL`/`@downloadURL` pointing at a small proxy (`/api/userscript?key=...`)
-that holds a read-only GitHub token and serves the latest script from this **private** repo, so
-Tampermonkey can auto-update without the repo being public. On every push that changes the script, a
-GitHub Action (`.github/workflows/bump-version.yml`) bumps the patch version so Tampermonkey detects the
-update on its next check (default: ~daily; forceable from the dashboard).
-
-Setup steps for the proxy + token live in [`vercel-proxy/README.md`](vercel-proxy/README.md). Install the
-script once from the proxy URL so Tampermonkey records the update source; after that, `git push` is all
-it takes to ship an update.
+`@updateURL`/`@downloadURL` point straight at the raw file on `main` — no proxy, no token, no secrets.
+On every push that changes the script, a GitHub Action (`.github/workflows/bump-version.yml`) bumps the
+patch version, so Tampermonkey sees a new version on its next check (default: ~daily; forceable from the
+dashboard). Push to `main` is all it takes to ship an update.
 
 ## Versioning
 
